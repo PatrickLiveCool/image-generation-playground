@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
     const { runId } = await request.json()
 
     if (!runId) {
-      return NextResponse.json({ error: "runId is required" }, { status: 400 })
+      return NextResponse.json({ error: "缺少任务编号 runId" }, { status: 400 })
     }
 
     const run = getRun(runId)
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error"
+    const message = error instanceof Error ? error.message : "未知错误"
     console.error("[cancel-generation] Error:", message)
     // Don't fail — the workflow might already be done
     return NextResponse.json({ success: true })

@@ -37,7 +37,7 @@ export function clearDraft() {
 }
 
 export function useDraftState(state: DraftState) {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const save = useCallback(() => {
     // Only save if there's something worth saving

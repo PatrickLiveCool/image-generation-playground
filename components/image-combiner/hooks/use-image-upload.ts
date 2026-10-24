@@ -118,13 +118,13 @@ export function useImageUpload(options?: UseImageUploadOptions) {
         type: "image/jpeg",
       })
     } catch (error) {
-      throw new Error("Could not convert HEIC image")
+      throw new Error("无法转换 HEIC 图片")
     }
   }
 
   const handleImageUpload = async (file: File, imageNumber: 1 | 2) => {
     if (!validateImageFormat(file)) {
-      showToast.current?.("Please select a valid image file.", "error")
+      showToast.current?.("请选择有效的图片文件。", "error")
       return
     }
 
@@ -135,7 +135,7 @@ export function useImageUpload(options?: UseImageUploadOptions) {
       try {
         processedFile = await convertHeicToJpeg(file)
       } catch (error) {
-        showToast.current?.("Error converting image. Please try a different format.", "error")
+        showToast.current?.("图片转换失败，请尝试其他格式。", "error")
         return
       }
     }
@@ -167,7 +167,7 @@ export function useImageUpload(options?: UseImageUploadOptions) {
       }
     }
     reader.onerror = () => {
-      showToast.current?.("Error reading the image file. Please try again.", "error")
+      showToast.current?.("读取图片文件失败，请重试。", "error")
     }
     reader.readAsDataURL(processedFile)
   }

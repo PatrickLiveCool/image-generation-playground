@@ -63,7 +63,7 @@ export function useDragDrop({ onImageUpload, setUseUrls, onToast }: UseDragDropP
           setUseUrls(false)
           const targetSlot = slot || 1
           await onImageUpload(file, targetSlot)
-          onToast(`Image dropped to ${targetSlot === 1 ? "first" : "second"} slot`, "success")
+          onToast(`图片已放入第${targetSlot === 1 ? "一" : "二"}个位置`, "success")
         }
       }
     },

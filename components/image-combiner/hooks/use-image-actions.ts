@@ -129,7 +129,7 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
             const pngBlob = await convertToPngBlob(generatedImage.url)
             const clipboardItem = new ClipboardItem({ "image/png": pngBlob })
             await navigator.clipboard.write([clipboardItem])
-            onToast("Image copied to clipboard!", "success")
+            onToast("图片已复制到剪贴板！", "success")
             return
           } catch (clipboardError) {
             try {
@@ -139,7 +139,7 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
               reader.onloadend = async () => {
                 try {
                   await navigator.clipboard.writeText(reader.result as string)
-                  onToast("Image data copied! Paste in compatible apps.", "success")
+                  onToast("图片数据已复制，可粘贴到兼容的应用中。", "success")
                 } catch (err) {
                   throw new Error("Clipboard not supported")
                 }
@@ -147,26 +147,26 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
               reader.readAsDataURL(blob)
               return
             } catch (fallbackError) {
-              onToast("Copy not supported. Use download button instead.", "error")
+              onToast("当前环境不支持复制，请使用下载按钮。", "error")
               return
             }
           }
         }
 
-        onToast("Copying image...", "success")
+        onToast("正在复制图片…", "success")
         window.focus()
 
         const pngBlob = await convertToPngBlob(generatedImage.url)
         const clipboardItem = new ClipboardItem({ "image/png": pngBlob })
         await navigator.clipboard.write([clipboardItem])
 
-        onToast("Image copied to clipboard!", "success")
+        onToast("图片已复制到剪贴板！", "success")
       } catch (error) {
         console.error("Error copying image:", error)
         if (error instanceof Error && error.message.includes("not focused")) {
-          onToast("Please click on the page first, then try copying again", "error")
+          onToast("请先点击页面，再尝试复制", "error")
         } else {
-          onToast("Failed to copy image", "error")
+          onToast("复制图片失败", "error")
         }
       }
     },

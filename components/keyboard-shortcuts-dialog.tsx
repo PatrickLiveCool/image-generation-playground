@@ -25,13 +25,13 @@ export function KeyboardShortcutsDialog({ triggerVariant = "default" }: Keyboard
   }, [])
 
   const shortcuts = [
-    { key: "Cmd/Ctrl + Enter", description: "Generate image" },
-    { key: "Cmd/Ctrl + V", description: "Paste image from clipboard" },
-    { key: "Cmd/Ctrl + C", description: "Copy generated image" },
-    { key: "Cmd/Ctrl + D", description: "Download image" },
-    { key: "Cmd/Ctrl + U", description: "Use as input" },
-    { key: "Escape", description: "Close fullscreen or dialogs" },
-    { key: "Cmd/Ctrl + /", description: "Toggle this help" },
+    { key: "Cmd/Ctrl + Enter", description: "生成图像" },
+    { key: "Cmd/Ctrl + V", description: "从剪贴板粘贴图片" },
+    { key: "Cmd/Ctrl + C", description: "复制生成的图片" },
+    { key: "Cmd/Ctrl + D", description: "下载图片" },
+    { key: "Cmd/Ctrl + U", description: "用作参考图片" },
+    { key: "Escape", description: "关闭全屏或对话框" },
+    { key: "Cmd/Ctrl + /", description: "显示或隐藏快捷键说明" },
   ]
 
   if (isMobile) {
@@ -47,14 +47,14 @@ export function KeyboardShortcutsDialog({ triggerVariant = "default" }: Keyboard
           </button>
         ) : (
           <button className="text-xs md:text-sm text-gray-400 hover:text-white transition-colors duration-200 flex items-center gap-2">
-            <span>Keyboard Shortcuts</span>
+            <span>键盘快捷键</span>
             <span className="text-xs font-mono bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5">?</span>
           </button>
         )}
       </DialogTrigger>
       <DialogContent className="bg-black border-gray-700 text-white max-w-md">
         <DialogHeader>
-          <DialogTitle>Keyboard Shortcuts</DialogTitle>
+          <DialogTitle>键盘快捷键</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 mt-4">
           {shortcuts.map((shortcut, i) => (

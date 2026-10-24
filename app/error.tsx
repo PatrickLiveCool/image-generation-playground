@@ -17,12 +17,12 @@ export default function Error({
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-4 text-center">
-        <h2 className="text-2xl font-bold text-foreground">Something went wrong!</h2>
+        <h2 className="text-2xl font-bold text-foreground">出错了</h2>
         <p className="text-sm text-muted-foreground">
-          {error.message || 'An unexpected error occurred'}
+          发生了意外错误，请重试。
         </p>
         <Button onClick={() => reset()} className="w-full">
-          Try again
+          重试
         </Button>
       </div>
     </div>

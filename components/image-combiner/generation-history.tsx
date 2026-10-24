@@ -72,7 +72,7 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
       )}
       role="button"
       tabIndex={0}
-      aria-label={`Generation ${index + 1}`}
+      aria-label={`第 ${index + 1} 张生成图片`}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
@@ -89,7 +89,7 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
               onClick={(e) => onDeleteClick(e, gen.id)}
               disabled={deletingId === gen.id}
               className="absolute top-1 right-1 p-1 bg-black/70 hover:bg-white text-white hover:text-black opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50 z-10"
-              aria-label="Delete generation"
+              aria-label="删除生成记录"
             >
               {deletingId === gen.id ? (
                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -102,7 +102,7 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
           )}
           <Image
             src={gen.imageUrl}
-            alt={gen.prompt || "Generated image"}
+            alt={gen.prompt || "生成的图片"}
             width={192}
             height={192}
             quality={85}
@@ -134,9 +134,9 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
               onCancel(gen.id)
             }}
             className="mt-2 text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white text-white hover:text-black transition-all"
-            aria-label="Cancel generation"
+            aria-label="取消生成"
           >
-            Cancel
+            取消
           </button>
         </div>
       )}
@@ -153,13 +153,13 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
-          <span className="sr-only">Generation failed</span>
+          <span className="sr-only">生成失败</span>
           {onDelete && (
             <button
               onClick={(e) => onDeleteClick(e, gen.id)}
               disabled={deletingId === gen.id}
               className="absolute top-1 right-1 p-1 bg-black/70 hover:bg-white text-white hover:text-black opacity-100 transition-all disabled:opacity-50 z-10"
-              aria-label="Delete generation"
+              aria-label="删除生成记录"
             >
               {deletingId === gen.id ? (
                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -233,7 +233,7 @@ export const GenerationHistory = memo(function GenerationHistory({
 
   return (
     <div className={cn("flex flex-col w-full", className)}>
-      {!compact && <p className="text-xs md:text-sm font-medium text-gray-400 mb-1">History</p>}
+      {!compact && <p className="text-xs md:text-sm font-medium text-gray-400 mb-1">历史记录</p>}
       <div
         ref={scrollContainerRef}
         className={cn(
@@ -243,7 +243,7 @@ export const GenerationHistory = memo(function GenerationHistory({
       >
         {generations.length === 0 && hasInitiallyLoaded ? (
           <div className="flex items-center justify-center w-full h-20 md:h-28 text-gray-500 text-xs md:text-sm">
-            No generations yet
+            暂无生成记录
           </div>
         ) : generations.length === 0 ? (
           null

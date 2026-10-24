@@ -185,14 +185,14 @@ export const InputSection = memo(function InputSection({
           <div className="flex flex-col gap-2 md:gap-3">
             <div className="flex items-center justify-between mb-1 md:mb-2 select-none min-w-0">
               <div className="flex flex-col gap-1 flex-shrink-0">
-                <label className="text-sm md:text-base font-medium text-gray-300">Prompt</label>
+                <label className="text-sm md:text-base font-medium text-gray-300">提示词</label>
               </div>
               <div className="flex items-center gap-1.5 md:gap-2 min-w-0 flex-shrink overflow-hidden">
                 <ModelSelector value={selectedModel} onChange={setSelectedModel} />
                 {(selectedModel === "google/gemini-3.1-flash-image-preview" || selectedModel.startsWith("openai/")) && (
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button aria-label="Settings" className="h-7 md:h-10 px-2 bg-black/50 border border-gray-600 text-gray-300 hover:text-white hover:border-gray-500 transition-all">
+                    <button aria-label="设置" className="h-7 md:h-10 px-2 bg-black/50 border border-gray-600 text-gray-300 hover:text-white hover:border-gray-500 transition-all">
                       <Settings2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
                     </button>
                   </PopoverTrigger>
@@ -200,8 +200,8 @@ export const InputSection = memo(function InputSection({
                     {selectedModel === "google/gemini-3.1-flash-image-preview" && (
                       <>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">Thinking</label>
-                          <p className="text-[10px] text-gray-500">How much the model reasons before generating</p>
+                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">思考深度</label>
+                          <p className="text-[10px] text-gray-500">模型在生成图像前的推理深度</p>
                           <div className="inline-flex w-full bg-black/50 border border-gray-600">
                             <button
                               onClick={() => setThinkingLevel("minimal")}
@@ -210,7 +210,7 @@ export const InputSection = memo(function InputSection({
                                 thinkingLevel === "minimal" ? "bg-white text-black" : "text-gray-300 hover:text-white",
                               )}
                             >
-                              Minimal
+                              简要
                             </button>
                             <button
                               onClick={() => setThinkingLevel("high")}
@@ -219,13 +219,13 @@ export const InputSection = memo(function InputSection({
                                 thinkingLevel === "high" ? "bg-white text-black" : "text-gray-300 hover:text-white",
                               )}
                             >
-                              High
+                              深入
                             </button>
                           </div>
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">Resolution</label>
-                          <p className="text-[10px] text-gray-500">Output image size</p>
+                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">分辨率</label>
+                          <p className="text-[10px] text-gray-500">输出图像的尺寸</p>
                           <div className="inline-flex w-full bg-black/50 border border-gray-600">
                             {(["1K", "2K", "4K"] as const).map((r) => (
                               <button
@@ -242,8 +242,8 @@ export const InputSection = memo(function InputSection({
                           </div>
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">Search</label>
-                          <p className="text-[10px] text-gray-500">Ground the generation with real-time web results</p>
+                          <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">联网搜索</label>
+                          <p className="text-[10px] text-gray-500">参考实时网页搜索结果生成图像</p>
                           <button
                             onClick={() => setUseGrounding(!useGrounding)}
                             className={cn(
@@ -254,15 +254,15 @@ export const InputSection = memo(function InputSection({
                             )}
                           >
                             <Search className="w-3 h-3 flex-shrink-0" />
-                            <span className="whitespace-nowrap">Google Search</span>
+                            <span className="whitespace-nowrap">Google 搜索</span>
                           </button>
                         </div>
                       </>
                     )}
                     {selectedModel.startsWith("openai/") && (
                       <div className="space-y-1.5">
-                        <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">Quality</label>
-                        <p className="text-[10px] text-gray-500">Higher quality uses more compute</p>
+                        <label className="text-[10px] md:text-xs text-gray-400 uppercase tracking-wider">画质</label>
+                        <p className="text-[10px] text-gray-500">画质越高，所需计算资源越多</p>
                         <div className="inline-flex w-full bg-black/50 border border-gray-600">
                           {(["auto", "low", "medium", "high"] as const).map((q) => (
                             <button
@@ -273,7 +273,7 @@ export const InputSection = memo(function InputSection({
                                 quality === q ? "bg-white text-black" : "text-gray-300 hover:text-white",
                               )}
                             >
-                              {q}
+                              {{ auto: "自动", low: "低", medium: "中", high: "高" }[q]}
                             </button>
                           ))}
                         </div>
@@ -283,7 +283,7 @@ export const InputSection = memo(function InputSection({
                 </Popover>
                 )}
                 <Select value={aspectRatio} onValueChange={setAspectRatio}>
-                  <SelectTrigger aria-label="Select aspect ratio" className="w-[72px] md:w-[115px] !h-7 md:!h-10 px-2 md:px-3 !py-0 bg-black/50 border border-gray-600 text-white text-xs md:text-sm focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=open]:ring-0 data-[state=open]:ring-offset-0">
+                  <SelectTrigger aria-label="选择宽高比" className="w-[72px] md:w-[115px] !h-7 md:!h-10 px-2 md:px-3 !py-0 bg-black/50 border border-gray-600 text-white text-xs md:text-sm focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=open]:ring-0 data-[state=open]:ring-offset-0">
                     <SelectValue placeholder="1:1" />
                   </SelectTrigger>
                   <SelectContent className="bg-black/95 border-gray-600 text-white">
@@ -301,11 +301,11 @@ export const InputSection = memo(function InputSection({
                   onClick={onClearAll}
                   disabled={!prompt.trim() && !hasImages}
                   variant="outline"
-                  aria-label="Clear all"
+                  aria-label="清空全部"
                   className="h-7 md:h-10 px-3 py-0 text-xs md:text-sm bg-transparent border border-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
                 >
                   <Trash2 className="size-4 md:hidden" />
-                  <span className="hidden md:inline">Clear</span>
+                  <span className="hidden md:inline">清空</span>
                 </Button>
               </div>
             </div>
@@ -316,7 +316,7 @@ export const InputSection = memo(function InputSection({
               onKeyDown={onKeyDown}
               onPaste={onPromptPaste}
               placeholder=""
-              aria-label="Image generation prompt"
+              aria-label="图像生成提示词"
               autoFocus
               className="w-full flex-1 min-h-[60px] max-h-[100px] sm:min-h-[100px] sm:max-h-[140px] lg:min-h-[12vh] lg:max-h-[18vh] xl:min-h-[14vh] xl:max-h-[20vh] p-2 md:p-4 bg-black/50 border-2 border-gray-600 resize-none focus:outline-none focus:border-white text-white text-xs md:text-base select-text"
               style={{
@@ -331,7 +331,7 @@ export const InputSection = memo(function InputSection({
             <div>
               <div className="flex items-center justify-between mb-1 md:mb-2 select-none min-w-0">
                 <div className="flex flex-col gap-1">
-                  <label className="text-sm md:text-base font-medium text-gray-300">Images (optional)</label>
+                  <label className="text-sm md:text-base font-medium text-gray-300">参考图片（可选）</label>
                 </div>
                 <div className="inline-flex bg-black/50 border border-gray-600">
                   <button
@@ -341,7 +341,7 @@ export const InputSection = memo(function InputSection({
                       !useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white",
                     )}
                   >
-                    Files
+                    文件
                   </button>
                   <button
                     onClick={toggleUrls(true)}
@@ -350,7 +350,7 @@ export const InputSection = memo(function InputSection({
                       useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white",
                     )}
                   >
-                    URLs
+                    链接
                   </button>
                 </div>
               </div>
@@ -362,14 +362,14 @@ export const InputSection = memo(function InputSection({
                       type="url"
                       value={image1Url}
                       onChange={handleUrl1Change}
-                      placeholder="First image URL"
-                      aria-label="First image URL"
+                      placeholder="第一张图片的链接"
+                      aria-label="第一张图片的链接"
                       className="w-full p-2 md:p-3 pr-8 bg-black/50 border border-gray-600 text-white text-xs focus:outline-none focus:ring-2 focus:ring-white select-text"
                     />
                     {image1Url && (
                       <button
                         onClick={handleClearImage1}
-                        aria-label="Clear first image URL"
+                        aria-label="清空第一张图片的链接"
                         className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white transition-colors"
                       >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -384,14 +384,14 @@ export const InputSection = memo(function InputSection({
                       type="url"
                       value={image2Url}
                       onChange={handleUrl2Change}
-                      placeholder="Second image URL"
-                      aria-label="Second image URL"
+                      placeholder="第二张图片的链接"
+                      aria-label="第二张图片的链接"
                       className="w-full p-2 md:p-3 pr-8 bg-black/50 border border-gray-600 text-white text-xs focus:outline-none focus:ring-2 focus:ring-white select-text"
                     />
                     {image2Url && (
                       <button
                         onClick={handleClearImage2}
-                        aria-label="Clear second image URL"
+                        aria-label="清空第二张图片的链接"
                         className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white transition-colors"
                       >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -443,7 +443,7 @@ export const InputSection = memo(function InputSection({
           <div className="pt-0">
             <div className="flex items-center gap-2">
               <Button onClick={onGenerate} disabled={!canGenerate} className={btnClassName}>
-                Run
+                生成图像
               </Button>
             </div>
           </div>

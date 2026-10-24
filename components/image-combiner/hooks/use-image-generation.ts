@@ -125,7 +125,7 @@ async function pollWorkflowStatus(
         return { status: "completed", result: data.result }
       }
       if (data.status === "failed") {
-        return { status: "failed", error: data.error || "Generation failed" }
+        return { status: "failed", error: data.error || "生成失败" }
       }
       // "running" or "pending" — keep polling
     } catch (e) {
@@ -134,7 +134,7 @@ async function pollWorkflowStatus(
     }
   }
 
-  return { status: "failed", error: "Generation timed out after 6 minutes" }
+  return { status: "failed", error: "生成已超过 6 分钟，等待超时" }
 }
 
 export function useImageGeneration({
@@ -332,7 +332,7 @@ export function useImageGeneration({
 
         if (pollResult.status === "failed") {
           setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
-          onToast(pollResult.error || "Generation failed", "error")
+          onToast(pollResult.error || "生成失败", "error")
           return
         }
 
@@ -388,7 +388,7 @@ export function useImageGeneration({
 
     // Remove entirely — don't leave a "cancelled" thumbnail
     setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
-    onToast("Generation cancelled", "error")
+    onToast("已取消生成", "error")
   }
 
   const generateImage = async (options?: GenerateImageOptions) => {
@@ -410,15 +410,15 @@ export function useImageGeneration({
     const currentMode = hasImages ? "image-editing" : "text-to-image"
 
     if (currentMode === "image-editing" && !effectiveUseUrls && !effectiveImage1) {
-      onToast("Please upload at least one image for editing mode", "error")
+      onToast("编辑模式下请至少上传一张图片", "error")
       return
     }
     if (currentMode === "image-editing" && effectiveUseUrls && !effectiveImage1Url) {
-      onToast("Please provide at least one image URL for editing mode", "error")
+      onToast("编辑模式下请至少提供一个图片链接", "error")
       return
     }
     if (!effectivePrompt.trim()) {
-      onToast("Please enter a prompt", "error")
+      onToast("请输入提示词", "error")
       return
     }
 
@@ -522,14 +522,14 @@ export function useImageGeneration({
             const errorData = await response.json()
             stopProgress()
             setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
-            onToast(errorData.error || "Service temporarily unavailable. Please try again shortly.", "error")
+            onToast(errorData.error || "服务暂时不可用，请稍后重试。", "error")
             return
           }
 
           if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: "Unknown error" }))
+            const errorData = await response.json().catch(() => ({ error: "未知错误" }))
             // Prefer the actionable `details` (e.g. "connect Vercel Blob") when present.
-            throw new Error(errorData.details || errorData.error || "Failed to generate image")
+            throw new Error(errorData.details || errorData.error || "生成图像失败")
           }
 
           const { runId } = await response.json()
@@ -557,7 +557,7 @@ export function useImageGeneration({
           } catch {}
 
           if (pollResult.status === "failed") {
-            throw new Error(pollResult.error || "Generation failed")
+            throw new Error(pollResult.error || "生成失败")
           }
 
           const data = pollResult.result
@@ -591,11 +591,11 @@ export function useImageGeneration({
             return
           }
 
-          const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
+          const errorMessage = error instanceof Error ? error.message : "发生了未知错误"
 
           setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
 
-          onToast(errorMessage, "error")
+          onToast(/[\u3400-\u9fff]/.test(errorMessage) ? errorMessage : "生成失败，请检查网络连接后重试。", "error")
         }
       })()
 
@@ -615,10 +615,10 @@ export function useImageGeneration({
       const file = new File([blob], "generated-image.png", { type: "image/png" })
 
       await onImageUpload(file, 1)
-      onToast("Image loaded into Input 1", "success")
+      onToast("图片已载入为第一张参考图片", "success")
     } catch (error) {
       console.error("Error loading image as input:", error)
-      onToast("Error loading image", "error")
+      onToast("图片加载失败", "error")
     }
   }
 

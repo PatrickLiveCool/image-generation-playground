@@ -25,13 +25,13 @@ function useElapsedSeconds() {
 
 function getStatusMessage(elapsed: number): string | null {
   if (elapsed < 45) return null
-  return "The model is taking longer than usual — hang tight"
+  return "本次生成耗时较长，请耐心等待"
 }
 
 export function ProgressBar({ progress, onCancel }: ProgressBarProps) {
   const barRef = useRef<HTMLDivElement>(null)
   const currentRef = useRef(progress) // Start at current value — no animation from 0
-  const animationRef = useRef<number>()
+  const animationRef = useRef<number | undefined>(undefined)
   const elapsed = useElapsedSeconds()
   const statusMessage = getStatusMessage(elapsed)
 
@@ -105,7 +105,7 @@ export function ProgressBar({ progress, onCancel }: ProgressBarProps) {
             size="sm"
             className="text-xs h-7 px-3 bg-transparent border-gray-600 text-white hover:bg-gray-700"
           >
-            Cancel
+            取消
           </Button>
         </div>
       </div>

@@ -297,7 +297,7 @@ export function ImageCombiner(): ReactElement {
   )
 
   return (
-    <div className="bg-background h-dvh overflow-hidden flex flex-col select-none font-[family-name:var(--font-geist-pixel)] overscroll-none touch-pan-x touch-pan-y">
+    <div className="bg-background h-dvh overflow-hidden flex flex-col select-none font-sans overscroll-none touch-pan-x touch-pan-y">
       {/* JSON-LD structured data is in layout.tsx - single source of truth for SEO */}
 
       {toast && <ToastNotification message={toast.message} type={toast.type} />}
@@ -330,10 +330,10 @@ export function ImageCombiner(): ReactElement {
               <div className="flex items-start justify-between gap-4 mb-2 md:mb-3 flex-shrink-0">
                 <div className="flex flex-col items-start">
                   <h1 className="text-lg md:text-2xl font-bold text-white select-none leading-none">
-                    <span className="text-gray-400">v0</span> Img Gen Playground
+                    <span className="text-gray-400">v0</span> 图像生成实验室
                   </h1>
                   <p className="text-[9px] md:text-[10px] text-gray-400 select-none tracking-wide mt-0.5 md:mt-1">
-                    Powered by{" "}
+                    技术支持：
                     <a
                       href="https://vercel.com/ai-gateway"
                       target="_blank"
@@ -464,11 +464,11 @@ export function ImageCombiner(): ReactElement {
                   rel="noopener noreferrer"
                   className="hover:text-white/80 transition-colors"
                 >
-                  Clone this app
+                  克隆此应用
                 </a>
                 <span className="text-white/20">•</span>
                 <button onClick={() => setShowHowItWorks(true)} className="hover:text-white/80 transition-colors">
-                  How it works
+                  使用说明
                 </button>
                 <span className="text-white/20">•</span>
                 <a

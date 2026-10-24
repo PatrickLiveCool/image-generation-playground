@@ -42,9 +42,9 @@ export async function POST(request: NextRequest) {
     if (!apiKey) {
       return NextResponse.json<ErrorResponse>(
         {
-          error: "AI Gateway is not configured",
+          error: "尚未配置 AI Gateway",
           details:
-            "AI_GATEWAY_API_KEY is missing. Add your Vercel AI Gateway API key to this project's environment variables.",
+            "缺少 AI_GATEWAY_API_KEY。请检查项目的 Vercel AI Gateway 配置。",
         },
         { status: 500 },
       )
@@ -56,9 +56,9 @@ export async function POST(request: NextRequest) {
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       return NextResponse.json<ErrorResponse>(
         {
-          error: "Blob storage is not configured",
+          error: "尚未配置 Blob 存储",
           details:
-            "BLOB_READ_WRITE_TOKEN is missing. Connect Vercel Blob storage to this project (Project Settings → Storage → Blob) so generated images can be saved.",
+            "缺少 BLOB_READ_WRITE_TOKEN。请在项目设置中连接 Vercel Blob 存储，以便保存生成的图片。",
         },
         { status: 500 },
       )
@@ -78,11 +78,11 @@ export async function POST(request: NextRequest) {
     const useGrounding = formData.get("useGrounding") === "true"
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return NextResponse.json<ErrorResponse>({ error: "A prompt is required" }, { status: 400 })
+      return NextResponse.json<ErrorResponse>({ error: "请输入提示词" }, { status: 400 })
     }
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return NextResponse.json<ErrorResponse>(
-        { error: `Prompt too long (max ${MAX_PROMPT_LENGTH} characters)` },
+        { error: `提示词过长（最多 ${MAX_PROMPT_LENGTH} 个字符）` },
         { status: 400 },
       )
     }
@@ -102,33 +102,33 @@ export async function POST(request: NextRequest) {
 
       if (!hasImage1) {
         return NextResponse.json<ErrorResponse>(
-          { error: "At least one image is required for editing mode" },
+          { error: "编辑模式下至少需要一张图片" },
           { status: 400 },
         )
       }
 
       if (image1Url && !isAllowedImageUrl(image1Url)) {
         return NextResponse.json<ErrorResponse>(
-          { error: "Invalid image URL. Only HTTPS URLs from allowed domains are accepted." },
+          { error: "图片链接无效，仅接受允许域名下的 HTTPS 链接。" },
           { status: 400 },
         )
       }
       if (image2Url && !isAllowedImageUrl(image2Url)) {
         return NextResponse.json<ErrorResponse>(
-          { error: "Invalid image URL. Only HTTPS URLs from allowed domains are accepted." },
+          { error: "图片链接无效，仅接受允许域名下的 HTTPS 链接。" },
           { status: 400 },
         )
       }
 
       if (image1 && image1.size > MAX_FILE_SIZE) {
         return NextResponse.json<ErrorResponse>(
-          { error: `Image 1 too large. Maximum ${MAX_FILE_SIZE / 1024 / 1024}MB allowed.` },
+          { error: `第一张图片过大，最大允许 ${MAX_FILE_SIZE / 1024 / 1024} MB。` },
           { status: 400 },
         )
       }
       if (image2 && image2.size > MAX_FILE_SIZE) {
         return NextResponse.json<ErrorResponse>(
-          { error: `Image 2 too large. Maximum ${MAX_FILE_SIZE / 1024 / 1024}MB allowed.` },
+          { error: `第二张图片过大，最大允许 ${MAX_FILE_SIZE / 1024 / 1024} MB。` },
           { status: 400 },
         )
       }
@@ -182,7 +182,7 @@ export async function POST(request: NextRequest) {
     console.error("[generate-image] Error starting workflow:", errorMessage)
 
     return NextResponse.json<ErrorResponse>(
-      { error: "Something went wrong. Please try again." },
+      { error: "发生错误，请重试。" },
       { status: 500 },
     )
   }

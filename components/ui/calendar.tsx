@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { DayPicker } from 'react-day-picker'
+import { zhCN } from 'date-fns/locale'
 
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
@@ -17,6 +18,14 @@ function Calendar({
 }: CalendarProps) {
   return (
     <DayPicker
+      locale={zhCN}
+      labels={{
+        labelMonthDropdown: () => '选择月份',
+        labelYearDropdown: () => '选择年份',
+        labelPrevious: () => '上个月',
+        labelNext: () => '下个月',
+        labelWeekNumber: (week) => `第 ${week} 周`,
+      }}
       showOutsideDays={showOutsideDays}
       className={cn('p-3', className)}
       classNames={{

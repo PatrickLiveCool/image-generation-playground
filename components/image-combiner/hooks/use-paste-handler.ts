@@ -43,13 +43,13 @@ export function usePasteHandler({
                 setUseUrls(false)
                 if (!image1) {
                   await onImageUpload(file, 1)
-                  onToast("Image pasted successfully", "success")
+                  onToast("图片已粘贴", "success")
                 } else if (!image2) {
                   await onImageUpload(file, 2)
-                  onToast("Image pasted to second slot", "success")
+                  onToast("已粘贴为第二张参考图片", "success")
                 } else {
                   await onImageUpload(file, 1)
-                  onToast("Image replaced first slot", "success")
+                  onToast("已替换第一张参考图片", "success")
                 }
               }
               return
@@ -77,7 +77,7 @@ export function usePasteHandler({
 
             setTimeout(() => {
               onUrlChange(url, targetSlot)
-              onToast(`Image URL pasted to ${targetSlot === 1 ? "first" : "second"} slot`, "success")
+              onToast(`图片链接已粘贴到第${targetSlot === 1 ? "一" : "二"}个位置`, "success")
             }, 150)
           }
         }
@@ -99,13 +99,13 @@ export function usePasteHandler({
               setUseUrls(false)
               if (!image1) {
                 await onImageUpload(file, 1)
-                onToast("Image pasted successfully", "success")
+                onToast("图片已粘贴", "success")
               } else if (!image2) {
                 await onImageUpload(file, 2)
-                onToast("Image pasted to second slot", "success")
+                onToast("已粘贴为第二张参考图片", "success")
               } else {
                 await onImageUpload(file, 1)
-                onToast("Image replaced first slot", "success")
+                onToast("已替换第一张参考图片", "success")
               }
             }
             return
@@ -131,13 +131,13 @@ export function usePasteHandler({
 
           if (!image1Url) {
             onUrlChange(url, 1)
-            onToast("Image URL loaded into first slot", "success")
+            onToast("已载入第一张参考图片的链接", "success")
           } else if (!image2Url) {
             onUrlChange(url, 2)
-            onToast("Image URL loaded into second slot", "success")
+            onToast("已载入第二张参考图片的链接", "success")
           } else {
             onUrlChange(url, 1)
-            onToast("Image URL replaced first slot", "success")
+            onToast("已替换第一张参考图片的链接", "success")
           }
         }
       }

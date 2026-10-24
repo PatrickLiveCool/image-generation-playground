@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   const runId = request.nextUrl.searchParams.get("runId")
 
   if (!runId) {
-    return NextResponse.json({ error: "runId is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少任务编号 runId" }, { status: 400 })
   }
 
   try {
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     if (status === "failed" || status === "cancelled") {
       return NextResponse.json({
         status: "failed",
-        error: "Generation failed",
+        error: "生成失败",
       })
     }
 
@@ -35,10 +35,10 @@ export async function GET(request: NextRequest) {
       startedAt: startedAt?.toISOString() || null,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error"
+    const message = error instanceof Error ? error.message : "未知错误"
     console.error("[generation-status] Error getting run:", message, error)
     return NextResponse.json(
-      { error: "Failed to check generation status", details: message },
+      { error: "查询生成状态失败", details: message },
       { status: 500 },
     )
   }

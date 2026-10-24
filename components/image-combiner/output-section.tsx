@@ -49,12 +49,12 @@ const ActionButtons = memo(function ActionButtons({
         variant="outline"
         size="sm"
         className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="Use as Input"
+        title="用作参考图片"
       >
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
         </svg>
-        <span className="hidden sm:inline">Input</span>
+        <span className="hidden sm:inline">用作参考</span>
       </Button>
       <Button
         onClick={onCopy}
@@ -62,13 +62,13 @@ const ActionButtons = memo(function ActionButtons({
         variant="outline"
         size="sm"
         className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="Copy to clipboard"
+        title="复制到剪贴板"
       >
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2" strokeWidth="2" />
           <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" strokeWidth="2" />
         </svg>
-        <span className="hidden sm:inline">Copy</span>
+        <span className="hidden sm:inline">复制</span>
       </Button>
       <Button
         onClick={onDownload}
@@ -76,7 +76,7 @@ const ActionButtons = memo(function ActionButtons({
         variant="outline"
         size="sm"
         className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="Download image"
+        title="下载图片"
       >
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -86,7 +86,7 @@ const ActionButtons = memo(function ActionButtons({
             d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
           />
         </svg>
-        <span className="hidden sm:inline">Download</span>
+        <span className="hidden sm:inline">下载</span>
       </Button>
       <Button
         onClick={onTogglePin}
@@ -98,7 +98,7 @@ const ActionButtons = memo(function ActionButtons({
             ? "bg-white text-black border-white hover:bg-gray-200"
             : "bg-black/70 border-gray-600 text-white hover:bg-black/90",
         )}
-        title={pinned ? "Unpin toolbar" : "Pin toolbar"}
+        title={pinned ? "取消固定工具栏" : "固定工具栏"}
       >
         {pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
       </Button>
@@ -201,7 +201,7 @@ export const OutputSection = memo(function OutputSection({
               {imageUrl.startsWith("data:") ? (
                 <img
                   src={imageUrl}
-                  alt={`Generated image: ${selectedGeneration?.prompt || ""}`}
+                  alt={`生成的图片：${selectedGeneration?.prompt || ""}`}
                   fetchPriority="high"
                   className={cn(
                     "max-w-full max-h-full cursor-pointer",
@@ -213,7 +213,7 @@ export const OutputSection = memo(function OutputSection({
               ) : (
                 <Image
                   src={imageUrl}
-                  alt={`Generated image: ${selectedGeneration?.prompt || ""}`}
+                  alt={`生成的图片：${selectedGeneration?.prompt || ""}`}
                   fill
                   priority
                   sizes="(max-width: 768px) 100vw, (max-width: 1280px) 55vw, 45vw"
@@ -275,7 +275,7 @@ export const OutputSection = memo(function OutputSection({
                   <polyline points="21,15 16,10 5,21" />
                 </svg>
               </div>
-              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">Ready to generate</p>
+              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">准备就绪，等待生成</p>
             </div>
           </div>
         )}
@@ -296,7 +296,7 @@ export const OutputSection = memo(function OutputSection({
                   <polyline points="21,15 16,10 5,21" />
                 </svg>
               </div>
-              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">Ready to generate</p>
+              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">准备就绪，等待生成</p>
             </div>
           </div>
         )}

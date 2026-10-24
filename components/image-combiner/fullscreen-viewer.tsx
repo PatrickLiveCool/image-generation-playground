@@ -14,7 +14,7 @@ export function FullscreenViewer({ imageUrl, onClose, onNavigate, canNavigate }:
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Fullscreen image view"
+      aria-label="全屏查看图片"
     >
       {/* Close button - fixed top right corner */}
       <button
@@ -23,8 +23,8 @@ export function FullscreenViewer({ imageUrl, onClose, onNavigate, canNavigate }:
           onClose()
         }}
         className="fixed top-4 right-4 z-50 text-white/60 hover:text-white p-1.5 transition-colors duration-200"
-        title="Close (ESC)"
-        aria-label="Close fullscreen"
+        title="关闭（Esc）"
+        aria-label="关闭全屏"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -41,8 +41,8 @@ export function FullscreenViewer({ imageUrl, onClose, onNavigate, canNavigate }:
               onNavigate("prev")
             }}
             className="fixed left-4 top-1/2 -translate-y-1/2 z-50 text-white/40 hover:text-white transition-colors duration-200"
-            title="Previous"
-            aria-label="Previous image"
+            title="上一张"
+            aria-label="上一张图片"
           >
             <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
@@ -53,7 +53,7 @@ export function FullscreenViewer({ imageUrl, onClose, onNavigate, canNavigate }:
         {/* Image */}
         <img
           src={imageUrl || "/placeholder.svg"}
-          alt="Fullscreen"
+          alt="全屏图片"
           className="max-w-full max-h-[90vh] object-contain shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         />
@@ -66,8 +66,8 @@ export function FullscreenViewer({ imageUrl, onClose, onNavigate, canNavigate }:
               onNavigate("next")
             }}
             className="fixed right-4 top-1/2 -translate-y-1/2 z-50 text-white/40 hover:text-white transition-colors duration-200"
-            title="Next"
-            aria-label="Next image"
+            title="下一张"
+            aria-label="下一张图片"
           >
             <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />

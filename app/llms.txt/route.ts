@@ -1,102 +1,95 @@
 export function GET() {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://v0nanobananapro.vercel.app"
-  const content = `# Nano Banana Pro
+  const content = `# 图像生成实验室
 
-> Nano Banana Pro is a free AI image generator and editor powered by Google Gemini. It creates images from text prompts and edits existing photos. No watermarks, no sign-up required to try. Available at ${appUrl}
+> 图像生成实验室是通过 Vercel AI Gateway 驱动的多模型 AI 图像生成与编辑工具，可根据文字提示生成图像，也可编辑已有图片。无需登录，生成结果不添加水印。访问地址：${appUrl}
 
-## About
+## 关于应用
 
-Nano Banana Pro is a web-based AI image generation tool built on Vercel using Google Gemini models through the Vercel AI Gateway. It is designed for anyone who needs to quickly generate or edit images using natural language descriptions.
+本应用基于 Next.js 构建并部署于 Vercel，通过统一的模型选择器访问 OpenAI、Google、xAI、Black Forest Labs（FLUX）、Recraft 和字节跳动的图像模型，适合需要使用自然语言快速生成或编辑图像的用户。
 
-Key facts:
-- Free to use with no account required for initial credits
-- No watermarks on any generated images
-- Supports text-to-image generation and AI image editing
-- Built with Next.js and deployed on Vercel
-- Created by the v0 team at Vercel
+基本信息：
+- 无需用户登录，也无需数据库
+- 生成图片不添加水印
+- 支持文字生成图像和 AI 图像编辑
+- 图片存储在 Vercel Blob，历史记录保存在当前浏览器中
+- 模型调用费用由部署者配置的 AI Gateway 账户承担
 
-## Features
+## 功能特色
 
-- **Text-to-Image Generation**: Describe any image in natural language and get a high-quality AI-generated result
-- **AI Image Editing**: Upload up to 2 reference images and describe the changes you want
-- **Multiple Aspect Ratios**: 1:1 (square), 16:9 (landscape/widescreen), 9:16 (portrait/stories/reels), 4:3 (standard), 3:4 (portrait)
-- **Two Generation Modes**:
-  - Pro Mode: Uses Google Gemini 2.0 Flash for highest quality output
-  - Classic Mode: Uses Google Gemini 2.5 Flash for approximately 2x faster generation
-- **Generation History**: Browse and revisit all previously generated images
-- **Download & Copy**: Save generated images or copy them directly to clipboard
+- **文字生成图像**：使用自然语言描述画面，获得 AI 生成结果
+- **AI 图像编辑**：最多上传两张参考图片，并描述修改需求
+- **多模型选择**：GPT Image、Gemini、Grok、FLUX.2、Recraft、Seedream
+- **多种宽高比**：仅显示当前模型支持的比例；切换模型时自动选择最接近的可用比例
+- **专属设置**：GPT Image 支持画质设置；Gemini 3.1 Flash 支持思考深度、最高 4K 分辨率和 Google 搜索参考
+- **生成历史**：浏览并回顾当前浏览器中的生成记录
+- **下载与复制**：保存图片，或直接复制到剪贴板
 
-## Comparison with Other AI Image Generators
+## 模型比较
 
-| Feature | Nano Banana Pro | DALL-E 3 | Midjourney | Stable Diffusion |
-|---|---|---|---|---|
-| Free tier | Yes (no sign-up) | Limited | No | Self-hosted only |
-| Watermarks | None | None | None | None |
-| Image editing | Yes | Yes | Limited | Yes |
-| Aspect ratios | 5 options | 3 options | Custom | Custom |
-| Model | Google Gemini | GPT-4o | Midjourney v6 | SD 3.5 |
-| Speed | Fast (2-8 sec) | Medium | Medium | Varies |
-| Web-based | Yes | Yes | Discord/Web | Self-hosted |
+不同模型的画质、速度、费用、宽高比及编辑能力有所不同。可通过模型选择器切换并比较，不承诺固定生成时长；具体能力与费用以服务商和 AI Gateway 的当前说明为准。
 
-## Use Cases
+## 使用场景
 
-- Social media content creation (Instagram posts, stories, reels)
-- Blog and article illustrations
-- Concept art and creative exploration
-- Product mockups and visualizations
-- Educational materials and presentations
-- Quick prototyping for design projects
+- 社交媒体内容创作
+- 博客与文章配图
+- 概念设计与创意探索
+- 产品效果图与可视化
+- 教学材料与演示文稿
+- 设计项目的快速原型制作
 
-## How to Use
+## 使用方法
 
-1. Go to ${appUrl}
-2. Type a description of the image you want in the text prompt field
-3. Optionally upload up to 2 reference images for editing or style reference
-4. Select your preferred aspect ratio (1:1, 16:9, 9:16, 4:3, or 3:4)
-5. Choose Pro mode (best quality) or Classic mode (faster)
-6. Click "Run" to generate
-7. Download the result or copy it to clipboard
+1. 访问 ${appUrl}
+2. 在提示词输入框中描述想要生成的图像
+3. 按需上传一到两张参考图片，用于编辑或风格参考
+4. 选择模型及可用的宽高比
+5. 按需调整画质、思考深度、分辨率等设置
+6. 点击“生成图像”
+7. 下载、复制结果，或将结果用作参考图片继续编辑
 
-## Technology Stack
+## 技术栈
 
-- **AI Model**: Google Gemini (2.0 Flash for Pro, 2.5 Flash for Classic)
-- **AI Infrastructure**: Vercel AI Gateway
-- **Framework**: Next.js 16 (App Router)
-- **Hosting**: Vercel
-- **Image Storage**: Vercel Blob
-- **Authentication**: Sign in with Vercel (OAuth 2.0)
+- **图像模型**：OpenAI、Google Gemini、xAI、FLUX、Recraft、Seedream
+- **AI 基础设施**：Vercel AI Gateway 与 AI SDK
+- **框架**：Next.js 16（App Router）
+- **托管**：Vercel
+- **持久化任务**：Vercel Workflow
+- **图片存储**：Vercel Blob
+- **历史记录**：当前浏览器的 localStorage
+- **界面语言**：简体中文，内置思源黑体
 
-## FAQ
+## 常见问题
 
-**Is Nano Banana Pro free?**
-Yes. You get free credits without needing to create an account. Sign in with Vercel to get additional credits.
+**需要登录吗？**
+不需要。当前版本不包含用户登录或积分系统。
 
-**Are there watermarks on generated images?**
-No. All images are generated without watermarks.
+**如何计费？**
+所有模型请求通过部署者的 AI Gateway 账户计费，具体费用取决于模型和参数。
 
-**What AI model does it use?**
-Google Gemini models accessed through Vercel AI Gateway. Pro mode uses Gemini 2.0 Flash and Classic mode uses Gemini 2.5 Flash.
+**生成的图片有水印吗？**
+本应用不向生成结果添加水印。
 
-**Can I edit existing images?**
-Yes. Upload up to 2 images and describe the changes you want in the text prompt.
+**使用哪些 AI 模型？**
+通过 Vercel AI Gateway 接入 GPT Image、Gemini、Grok、FLUX.2、Recraft 和 Seedream 系列模型，具体以界面中的模型列表为准。
 
-**What aspect ratios are supported?**
-Five aspect ratios: 1:1 (square), 16:9 (landscape), 9:16 (portrait), 4:3 (standard), 3:4 (portrait).
+**能编辑已有图片吗？**
+可以。最多上传两张图片，并在提示词中描述希望进行的修改。
 
-**Do I need to install anything?**
-No. Nano Banana Pro is entirely web-based and works in any modern browser.
+**支持哪些宽高比？**
+选项由当前模型决定，包含 1:1（正方形）、16:9（横向）、9:16（竖向）、4:3、3:4 等。
 
-**How fast is image generation?**
-Pro mode generates images in approximately 4-8 seconds. Classic mode is approximately 2x faster at 2-4 seconds.
+**需要安装软件吗？**
+不需要。应用完全基于网页，可在现代浏览器中运行。
 
-**Who made Nano Banana Pro?**
-It was built by the v0 team at Vercel as a showcase of the Vercel AI Gateway and Google Gemini integration.
+**图像生成需要多久？**
+耗时取决于所选模型、参数、请求内容及服务负载。生成过程中会显示进度，耗时较长时会提示等待。
 
-## Links
+## 相关链接
 
-- [Nano Banana Pro App](${appUrl}): The live application
-- [Vercel AI Gateway](https://vercel.com/docs/ai/ai-gateway): The AI infrastructure powering the image generation
-- [v0 by Vercel](https://v0.dev): The AI-powered development platform that built this app
+- [图像生成实验室](${appUrl})：在线应用
+- [Vercel AI Gateway](https://vercel.com/docs/ai/ai-gateway)：图像生成使用的 AI 基础设施
+- [v0 by Vercel](https://v0.dev)：构建本应用的 AI 开发平台
 `
 
   return new Response(content, {

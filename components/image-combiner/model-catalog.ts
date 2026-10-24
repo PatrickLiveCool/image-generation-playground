@@ -10,14 +10,14 @@ export interface ModelDefinition {
 
 export const MODEL_CATALOG: ModelDefinition[] = [
   // OpenAI
-  { id: "openai/gpt-image-2",      name: "GPT Image 2",      provider: "openai", api: "generateImage", badge: "New" },
+  { id: "openai/gpt-image-2",      name: "GPT Image 2",      provider: "openai", api: "generateImage", badge: "新" },
   { id: "openai/gpt-image-1.5",    name: "GPT Image 1.5",    provider: "openai", api: "generateImage" },
 
   // xAI
   { id: "xai/grok-imagine-image", name: "Grok Imagine", provider: "xai", api: "generateImage" },
 
   // Google Gemini (via generateText + responseModalities)
-  { id: "google/gemini-3.1-flash-image-preview", name: "Gemini 3.1 Flash", provider: "google", api: "generateText", badge: "New" },
+  { id: "google/gemini-3.1-flash-image-preview", name: "Gemini 3.1 Flash", provider: "google", api: "generateText", badge: "新" },
   { id: "google/gemini-3-pro-image",             name: "Gemini 3 Pro",     provider: "google", api: "generateText" },
   { id: "google/gemini-2.5-flash-image",         name: "Gemini 2.5 Flash", provider: "google", api: "generateText" },
 
@@ -73,5 +73,5 @@ export const PROVIDERS = [
   { key: "google",     label: "Google" },
   { key: "bfl",        label: "FLUX" },
   { key: "recraft",    label: "Recraft" },
-  { key: "bytedance",  label: "ByteDance" },
+  { key: "bytedance",  label: "字节跳动" },
 ]

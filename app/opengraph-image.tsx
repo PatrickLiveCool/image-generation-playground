@@ -1,8 +1,10 @@
 import { ImageResponse } from "next/og"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 
-export const runtime = "edge"
+export const runtime = "nodejs"
 
-export const alt = "Img Gen Playground - Multi-model AI image generation"
+export const alt = "图像生成实验室 - 多模型 AI 图像生成"
 export const size = { width: 1200, height: 630 }
 export const contentType = "image/png"
 
@@ -14,9 +16,7 @@ const AI_SDK_SVG = `<svg width="153" height="41" viewBox="0 0 153 41" fill="none
 const toDataUri = (svg: string) => `data:image/svg+xml;base64,${btoa(svg)}`
 
 export default async function Image() {
-  const fontData = await fetch(
-    new URL("./fonts/GeistPixelBETA-Square.otf", import.meta.url),
-  ).then((res) => res.arrayBuffer())
+  const fontData = await readFile(join(process.cwd(), "app/fonts/SourceHanSansSC-Regular.otf"))
 
   return new ImageResponse(
     (
@@ -29,7 +29,7 @@ export default async function Image() {
           justifyContent: "center",
           alignItems: "center",
           background: "#000000",
-          fontFamily: "GeistPixel",
+          fontFamily: "SourceHanSansSC",
         }}
       >
         {/* Title */}
@@ -42,7 +42,7 @@ export default async function Image() {
           }}
         >
           <span style={{ color: "rgba(255,255,255,0.45)" }}>v0</span>
-          <span style={{ color: "white" }}>Img Gen Playground</span>
+          <span style={{ color: "white" }}>图像生成实验室</span>
         </div>
         <div
           style={{
@@ -51,7 +51,7 @@ export default async function Image() {
             marginTop: 12,
           }}
         >
-          Multi-model AI image generation
+          多模型 AI 图像生成
         </div>
 
         {/* Feature tags */}
@@ -66,7 +66,7 @@ export default async function Image() {
         >
           <span>OpenAI · Google · FLUX · Recraft · xAI</span>
           <span>·</span>
-          <span>No Watermarks</span>
+          <span>无水印</span>
         </div>
 
         {/* Powered by */}
@@ -78,7 +78,7 @@ export default async function Image() {
             marginTop: 52,
           }}
         >
-          <span style={{ fontSize: 20, color: "rgba(255,255,255,0.5)" }}>Powered by</span>
+          <span style={{ fontSize: 20, color: "rgba(255,255,255,0.5)" }}>技术支持</span>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={toDataUri(AI_GATEWAY_SVG)} width={156} height={30} alt="AI Gateway" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -90,7 +90,7 @@ export default async function Image() {
       ...size,
       fonts: [
         {
-          name: "GeistPixel",
+          name: "SourceHanSansSC",
           data: fontData,
           style: "normal",
         },

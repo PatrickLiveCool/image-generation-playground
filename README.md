@@ -1,18 +1,21 @@
-# Img Gen Playground
+# 图像生成实验室
 
-A multi-model AI image generation playground powered by [Vercel AI Gateway](https://vercel.com/ai-gateway). Generate and edit images with models from OpenAI, Google, xAI, Black Forest Labs (FLUX), Recraft, and ByteDance — all through a single API key. No login, no database.
+由 [Vercel AI Gateway](https://vercel.com/ai-gateway) 驱动的多模型 AI 图像生成实验室。使用 OpenAI、Google、xAI、Black Forest Labs（FLUX）、Recraft 和字节跳动的模型生成与编辑图片，通过同一个 API 密钥访问。无需登录，也无需数据库。
 
-## Features
+## 功能特色
 
-- **Many models, one selector** — GPT Image, Gemini, Grok, FLUX.2, Recraft, Seedream.
-- **Per-model aspect ratios** — the selector only offers ratios each model supports; switching models snaps to the closest.
-- **GPT quality control**, Gemini thinking/resolution/grounding.
-- **Text-to-image and image editing** (drag & drop or paste a URL).
-- Generated images are stored in **Vercel Blob**; history is kept in your browser (localStorage).
+- **统一的多模型选择器**：GPT Image、Gemini、Grok、FLUX.2、Recraft、Seedream。
+- **按模型提供宽高比**：仅显示各模型支持的比例，切换模型时自动选择最接近的可用比例。
+- **GPT 画质控制**，以及 Gemini 思考深度、分辨率和搜索参考设置。
+- **文字生成图像与图像编辑**：支持拖放图片或粘贴图片链接。
+- 生成的图片存储在 **Vercel Blob**，历史记录保存在当前浏览器中（localStorage）。
+- 简体中文界面，使用项目内置的思源黑体资源显示中文。
 
-## Setup
+## 本地开发配置
 
-1. **Clone and install**
+推荐通过 GitHub 克隆项目后安装依赖；以下命令用于本地开发环境，v0 预览中无需手动运行。
+
+1. **克隆并安装**
 
    ```bash
    git clone https://github.com/vercel-labs/v0-nanobanana-template.git
@@ -20,31 +23,31 @@ A multi-model AI image generation playground powered by [Vercel AI Gateway](http
    pnpm install
    ```
 
-2. **Configure environment variables**
+2. **配置环境变量**
 
-   Copy `.env.example` to `.env.local` and fill in the values:
+   将 `.env.example` 复制为 `.env.local`，填写配置：
 
    ```bash
    cp .env.example .env.local
    ```
 
-   | Variable | Required | Description |
-   |----------|----------|-------------|
-   | `AI_GATEWAY_API_KEY` | Yes | Your [Vercel AI Gateway](https://vercel.com/ai-gateway) API key — every generation is billed to it |
-   | `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob token where generated images are stored |
+   | 变量 | 是否必需 | 说明 |
+   |------|----------|------|
+   | `AI_GATEWAY_API_KEY` | 是 | 当前实现使用的 [Vercel AI Gateway](https://vercel.com/ai-gateway) API 密钥，每次生成均计入该账户费用 |
+   | `BLOB_READ_WRITE_TOKEN` | 是 | 用于存储生成图片的 Vercel Blob 读写令牌 |
 
-3. **Run**
+3. **启动本地开发服务**
 
    ```bash
    pnpm dev
    ```
 
-## How it works
+## 工作原理
 
-The app runs each generation as a durable [Vercel Workflow](https://vercel.com/docs/workflow). Gemini models generate via the AI SDK's `generateText` (with image response modalities); all other providers go through `generateImage`. Every request uses **your** AI Gateway key, so you control the models and the spend — there's no per-user login or credit system.
+每次生成均作为持久化的 [Vercel Workflow](https://vercel.com/docs/workflow) 任务运行。Gemini 模型通过 AI SDK 的 `generateText` 生成图片（启用图像响应类型），其他服务商通过 `generateImage` 生成。每个请求使用**部署者的** AI Gateway 密钥，因此模型选择和费用由部署者管理，不包含按用户区分的登录或积分系统。
 
-## Deploy
+## 部署
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/vercel-labs/v0-nanobanana-template)
+[![部署到 Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/vercel-labs/v0-nanobanana-template)
 
-Add `AI_GATEWAY_API_KEY` and attach **Blob** storage (which provides `BLOB_READ_WRITE_TOKEN`) in your Vercel project settings.
+在 Vercel 项目设置中配置 `AI_GATEWAY_API_KEY`，并连接 **Blob** 存储（会提供 `BLOB_READ_WRITE_TOKEN`）。

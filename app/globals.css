@@ -59,9 +59,9 @@
 }
 
 @theme inline {
-  /* Updated font variables to use new Inter and JetBrains Mono fonts */
-  --font-sans: var(--font-inter);
-  --font-mono: var(--font-jetbrains-mono);
+  /* 使用内置思源黑体显示中文，像素字体保留为等宽样式。 */
+  --font-sans: var(--font-chinese), sans-serif;
+  --font-mono: var(--font-geist-pixel), var(--font-chinese), monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

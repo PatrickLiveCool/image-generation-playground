@@ -111,7 +111,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
       <button
         ref={btnRef}
         onClick={handleOpen}
-        aria-label="Select model"
+        aria-label="选择模型"
         aria-expanded={open}
         className={cn(
           "flex items-center gap-1.5 h-7 md:h-10 px-2 md:px-3 bg-black/50 border border-gray-600 text-gray-300 hover:text-white hover:border-gray-500 transition-all max-w-[140px] md:max-w-[220px]",
@@ -123,7 +123,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
             {ProviderLogo[current.provider as keyof typeof ProviderLogo]}
           </span>
         )}
-        <span className="text-xs font-medium truncate">{current?.name ?? "Model"}</span>
+        <span className="text-xs font-medium truncate">{current?.name ?? "模型"}</span>
         <svg className="w-3 h-3 flex-shrink-0 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={open ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
         </svg>
