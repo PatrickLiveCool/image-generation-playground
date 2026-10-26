@@ -101,12 +101,25 @@ HTTPS 使用 Let's Encrypt 证书，由 Certbot webroot 为 `image.qintopia.cn` 
 ## 检查
 
 ```bash
-pnpm exec tsc --noEmit
-node --experimental-strip-types --test tests/*.test.ts
+pnpm release:check
+pnpm typecheck
+pnpm test
+pnpm test:pr
+pnpm test:release
+pnpm build
+actionlint
 ```
 
 自动化检查验证本地逻辑，真实中转的模型权限、计费、生成效果和接口兼容性仍需使用实际配置验证。
 
 ## 对象存储运维
 
-私有 COS、权限与原图片域名方案的记录见 [对象存储运维](ops/image-storage/README.md)。当前应用部署及 Certbot 操作脚本位于 `ops/image-app-deploy/`；`ops/image-cert-sync/` 保留此前 CDN 证书同步方案的历史记录，已停用的定时器不再负责正式应用 HTTPS 续签。
+私有 COS、权限与原图片域名方案的记录见 [对象存储运维](ops/image-storage/README.md)。`ops/image-app-deploy/` 保留早期应用部署及 Certbot 操作记录；`ops/image-cert-sync/` 保留此前 CDN 证书同步方案的历史记录，已停用的定时器不再负责正式应用 HTTPS 续签。
+
+## 项目基础设施
+
+采用本项目专用的 PR → 版本 PR → Draft Release → 人工 Publish → 私有 COS 制品 → 受限 SSH 部署流程，保留 Next standalone 与现有独立 Node 服务。CI 在 Linux / Node 22.22.1 构建和验证制品，服务器负责校验、双端口切换、排空与恢复。发布文件和用户图片的凭据、前缀与清理范围分离。
+
+Release Please 使用仓库临时令牌，并显式触发版本 PR 的只读检查，无需保存维护者个人 PAT。当前个人私有仓库套餐不支持强制分支保护，CI 与维护者的 PR 约定仍有效；保持现有仓库及可见性。
+
+操作与首次接线见 [发布和恢复手册](docs/operations/release-runbook.md)，仓库约定见 [协作规范](docs/repository-contributing.md)，设计边界见 [基础设施规格](docs/implementation/spec-project-infrastructure.md)。工具安装、版本 PR 合并和正式应用发布分别验收；不能因工具已安装就把尚未 Publish 的版本称为上线。

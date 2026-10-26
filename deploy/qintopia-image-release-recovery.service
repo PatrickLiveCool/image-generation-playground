@@ -1,0 +1,11 @@
+[Unit]
+Description=Recover interrupted QinTopia image releases without terminating active requests
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/qintopia-image-deploy recover
+TimeoutStartSec=3min
+UMask=0077

@@ -3,9 +3,6 @@ const nextConfig = {
   output: "standalone",
 
   cacheComponents: true,
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   // Capability-bearing image requests must not enter request logs or disk caches.
   logging: { incomingRequests: false },
   images: {

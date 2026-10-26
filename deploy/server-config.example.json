@@ -1,0 +1,27 @@
+{
+  "application": "qintopia-image",
+  "stateDir": "/var/lib/qintopia-image-release",
+  "appRoot": "/opt/qintopia-image-app",
+  "nodeBinary": "/opt/qintopia-image-runtime/bin/node",
+  "environmentFile": "/etc/qintopia-image-app/environment",
+  "nginxSite": "/etc/nginx/sites-available/image.qintopia.cn",
+  "staticDir": "/opt/qintopia-image-app/shared-static",
+  "publicBaseUrl": "https://image.qintopia.cn",
+  "ports": [4400, 4401],
+  "healthTimeoutSeconds": 30,
+  "drainTimeoutSeconds": 30,
+  "cosCredentialsFile": "/etc/qintopia-image-release/cos-readonly.json",
+  "cos": {
+    "bucket": "qintopia-image-1305166808",
+    "region": "ap-shanghai",
+    "prefix": "qintopia-image/releases/"
+  },
+  "legacy": {
+    "releaseId": "20261026T031554Z-5b6ede50e6",
+    "sourceSha256": "5b6ede50e6dfe081aa89e61b5b6254eb4d9543be2858612c913e34a5a94a1705",
+    "port": 4401,
+    "unit": "qintopia-image-app-4401.service",
+    "browserWorkspaceSchema": 1,
+    "assetCapabilityVersion": 1
+  }
+}

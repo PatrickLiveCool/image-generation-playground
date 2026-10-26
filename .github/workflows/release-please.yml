@@ -1,0 +1,47 @@
+name: Image Playground Release Please
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qintopia-image-release-please-master
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Prepare release PR
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Prepare version PR and draft release
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ github.token }}
+          target-branch: master
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - name: Explicitly request readonly checks for the current release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PRS_JSON: ${{ steps.release.outputs.prs }}
+          RELEASE_PR_JSON: ${{ steps.release.outputs.pr }}
+        run: node .github/scripts/release-pr-checks.mjs dispatch

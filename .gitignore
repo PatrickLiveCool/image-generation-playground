@@ -24,3 +24,14 @@ __pycache__/
 *.py[cod]
 
 *.tsbuildinfo
+
+# Generated route types and local release/acceptance files
+next-env.d.ts
+.local-workspace/
+.worktrees/
+.release-bundles/
+
+# Keep all local credentials out of source and artifacts
+.env
+.env.*
+!.env.example

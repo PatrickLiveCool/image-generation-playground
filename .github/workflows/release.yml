@@ -1,0 +1,249 @@
+name: Image Playground Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published stable release to replay, for example v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Release, rollback and retention share one queue and never cancel a deployment.
+concurrency:
+  group: qintopia-image-production
+  cancel-in-progress: false
+
+env:
+  COS_PREFIX: qintopia-image/releases/
+  NEXT_TELEMETRY_DISABLED: 1
+  NEXT_PUBLIC_APP_URL: https://image.qintopia.cn
+
+jobs:
+  validate:
+    name: Validate tagged release
+    if: (github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      release_tag: ${{ steps.identity.outputs.tag }}
+      release_sha: ${{ steps.identity.outputs.sha }}
+      harness_sha: ${{ steps.identity.outputs.harness_sha }}
+    steps:
+      - name: Check out trusted release tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: harness
+          ref: master
+          persist-credentials: false
+      - name: Check out tagged application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: source
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+          persist-credentials: false
+      - name: Resolve immutable release and tools identities
+        id: identity
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          published_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq 'select(.draft == false and .prerelease == false) | .tag_name')"
+          test "$published_tag" = "$RELEASE_TAG"
+          release_sha="$(git -C source rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$(git -C source rev-parse HEAD)" = "$release_sha"
+          git -C source merge-base --is-ancestor "$release_sha" origin/master
+          test -z "$(git -C source status --porcelain)"
+          test -z "$(git -C harness status --porcelain)"
+          harness_sha="$(git -C harness rev-parse HEAD)"
+          printf 'tag=%s\nsha=%s\nharness_sha=%s\n' "$RELEASE_TAG" "$release_sha" "$harness_sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.1
+      - name: Activate pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.2 --activate
+      - name: Install locked application dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+      - name: Verify release metadata
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+        run: node harness/scripts/check-release.mjs --root source --tag "$RELEASE_TAG"
+      - name: Typecheck
+        working-directory: source
+        run: pnpm typecheck
+      - name: Test application
+        working-directory: source
+        run: pnpm test
+      - name: Build application
+        working-directory: source
+        run: pnpm build
+      - name: Test trusted release tools
+        run: python3 -m unittest discover -s harness/scripts/release/tests -v
+
+  package-upload:
+    name: Package and upload immutable release
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      revision: ${{ steps.package.outputs.revision }}
+      key: ${{ steps.package.outputs.key }}
+      manifest_sha: ${{ steps.package.outputs.manifest_sha }}
+    env:
+      COS_BUCKET: ${{ vars.COS_BUCKET }}
+      COS_REGION: ${{ vars.COS_REGION }}
+      COS_ENDPOINT: ${{ vars.COS_ENDPOINT }}
+    steps:
+      - name: Check out frozen release tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: harness
+          ref: ${{ needs.validate.outputs.harness_sha }}
+          persist-credentials: false
+      - name: Check out frozen application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: source
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.release_sha }}
+          persist-credentials: false
+      - name: Verify source and deployment configuration
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+          HARNESS_SHA: ${{ needs.validate.outputs.harness_sha }}
+          UPLOAD_COS_SECRET_ID: ${{ secrets.UPLOAD_COS_SECRET_ID }}
+          UPLOAD_COS_SECRET_KEY: ${{ secrets.UPLOAD_COS_SECRET_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git -C source rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_SHA"
+          test "$(git -C harness rev-parse HEAD)" = "$HARNESS_SHA"
+          test -z "$(git -C source status --porcelain)"
+          for name in COS_BUCKET COS_REGION UPLOAD_COS_SECRET_ID UPLOAD_COS_SECRET_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!name:-}" ]; then
+              printf 'Missing release configuration: %s\n' "$name" >&2
+              exit 1
+            fi
+          done
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned COS client
+        run: python3 -m pip install --disable-pip-version-check --no-input -r harness/scripts/release/requirements.txt
+      - name: Reuse an already verified immutable bundle
+        id: bundle
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.release_tag }}
+          RELEASE_REVISION: ${{ needs.validate.outputs.release_sha }}
+          READ_COS_SECRET_ID: ${{ secrets.UPLOAD_COS_SECRET_ID }}
+          READ_COS_SECRET_KEY: ${{ secrets.UPLOAD_COS_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          directory="$(mktemp -d "$RUNNER_TEMP/qintopia-image-release.XXXXXX")"
+          fetch_status=0
+          python3 harness/scripts/release/cos.py fetch --version "$RELEASE_VERSION" --revision "$RELEASE_REVISION" --directory "$directory" || fetch_status=$?
+          if [ "$fetch_status" != 0 ] && [ "$fetch_status" != 3 ]; then
+            exit "$fetch_status"
+          fi
+          printf 'directory=%s\nfetch_status=%s\n' "$directory" "$fetch_status" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.bundle.outputs.fetch_status == '3'
+        with:
+          node-version: 22.22.1
+      - name: Build and package without cloud or deployment credentials
+        if: steps.bundle.outputs.fetch_status == '3'
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.release_tag }}
+          RELEASE_REVISION: ${{ needs.validate.outputs.release_sha }}
+          RELEASE_DIRECTORY: ${{ steps.bundle.outputs.directory }}
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@10.28.2 --activate
+          pnpm --dir source install --frozen-lockfile
+          pnpm --dir source build
+          test -z "$(git -C source status --porcelain)"
+          python3 harness/scripts/release/package.py --version "$RELEASE_VERSION" --revision "$RELEASE_REVISION" --source-root "$GITHUB_WORKSPACE/source" --output "$RELEASE_DIRECTORY"
+      - name: Upload immutable bundle and verify stored bytes
+        id: package
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.release_tag }}
+          RELEASE_REVISION: ${{ needs.validate.outputs.release_sha }}
+          RELEASE_DIRECTORY: ${{ steps.bundle.outputs.directory }}
+          UPLOAD_COS_SECRET_ID: ${{ secrets.UPLOAD_COS_SECRET_ID }}
+          UPLOAD_COS_SECRET_KEY: ${{ secrets.UPLOAD_COS_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          python3 harness/scripts/release/cos.py upload --directory "$RELEASE_DIRECTORY" --prefix "$COS_PREFIX"
+          manifest_sha="$(sha256sum "$RELEASE_DIRECTORY/manifest.json" | awk '{print $1}')"
+          printf 'version=%s\nrevision=%s\nkey=%s%s/%s/\nmanifest_sha=%s\n' "$RELEASE_VERSION" "$RELEASE_REVISION" "$COS_PREFIX" "$RELEASE_VERSION" "$RELEASE_REVISION" "$manifest_sha" >> "$GITHUB_OUTPUT"
+      - name: Remove temporary release bundles
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/qintopia-image-release."*
+
+  deploy:
+    name: Deploy published release
+    needs: [validate, package-upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Check out frozen deployment tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.harness_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned COS client for success markers
+        run: python3 -m pip install --disable-pip-version-check --no-input -r scripts/release/requirements.txt
+      - name: Materialize restricted SSH credentials
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/qintopia-image-deploy-key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/qintopia-image-known-hosts"
+      - name: Deploy through the restricted server entry
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY_FILE: ${{ runner.temp }}/qintopia-image-deploy-key
+          DEPLOY_KNOWN_HOSTS_FILE: ${{ runner.temp }}/qintopia-image-known-hosts
+          RELEASE_VERSION: ${{ needs.package-upload.outputs.version }}
+          RELEASE_REVISION: ${{ needs.package-upload.outputs.revision }}
+          RELEASE_KEY: ${{ needs.package-upload.outputs.key }}
+          RELEASE_MANIFEST_SHA: ${{ needs.package-upload.outputs.manifest_sha }}
+          COS_BUCKET: ${{ vars.COS_BUCKET }}
+          COS_REGION: ${{ vars.COS_REGION }}
+          COS_ENDPOINT: ${{ vars.COS_ENDPOINT }}
+          UPLOAD_COS_SECRET_ID: ${{ secrets.UPLOAD_COS_SECRET_ID }}
+          UPLOAD_COS_SECRET_KEY: ${{ secrets.UPLOAD_COS_SECRET_KEY }}
+          APP_PUBLIC_URL: https://image.qintopia.cn
+        run: |
+          set -euo pipefail
+          python3 scripts/release/orchestrate.py deploy --version "$RELEASE_VERSION" --revision "$RELEASE_REVISION" --key "$RELEASE_KEY" --manifest-sha "$RELEASE_MANIFEST_SHA"
+          printf 'Version %s, commit %s: server identity and health verified.\n' "$RELEASE_VERSION" "$RELEASE_REVISION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary SSH credentials
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/qintopia-image-deploy-key" "$RUNNER_TEMP/qintopia-image-known-hosts"
