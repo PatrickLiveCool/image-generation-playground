@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.1.0...v0.2.0) (2026-10-26)
+
+
+### Features
+
+* **infrastructure:** 建立图像应用发布、回退和恢复流程 ([8bf8f65](https://github.com/PatrickLiveCool/image-generation-playground/commit/8bf8f6501405d3998feacc60f6a8989a34606e63))
+
+
+### Bug Fixes
+
+* **ci:** accept manifest release branch dispatch ([#3](https://github.com/PatrickLiveCool/image-generation-playground/issues/3)) ([a7ca258](https://github.com/PatrickLiveCool/image-generation-playground/commit/a7ca2586009377a7942e18871b90f39e9fd30fb7))
+* **ui:** restore image playground controls and persistence ([#4](https://github.com/PatrickLiveCool/image-generation-playground/issues/4)) ([d745fed](https://github.com/PatrickLiveCool/image-generation-playground/commit/d745fedb960896f2272242eeec741b87a0987060))
+
 ## 0.1.0 (2026-10-26)
 
 Application baseline captured from commit `b0790ef270de110ed5a8ce1eb4d15058716ee939`.
