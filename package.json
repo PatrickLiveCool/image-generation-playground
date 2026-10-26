@@ -8,7 +8,7 @@
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit --incremental false",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:pr": "node --test scripts/check-pr-tests.mjs .github/scripts/release-pr-checks.test.mjs",
+    "test:pr": "node --test scripts/check-pr-tests.mjs",
     "test:release": "python3 -m unittest discover -s scripts/release/tests -v",
     "release:check": "node scripts/check-release.mjs"
   },

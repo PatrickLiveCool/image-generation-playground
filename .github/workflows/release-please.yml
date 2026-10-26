@@ -22,7 +22,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      actions: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -35,13 +34,7 @@ jobs:
         id: release
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
-          token: ${{ github.token }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           target-branch: master
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
-      - name: Explicitly request readonly checks for the current release PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_PRS_JSON: ${{ steps.release.outputs.prs }}
-          RELEASE_PR_JSON: ${{ steps.release.outputs.pr }}
-        run: node .github/scripts/release-pr-checks.mjs dispatch
