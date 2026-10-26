@@ -5,6 +5,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ARCHIVE, ReleaseError, inspect_archive, release_prefix, safe_extract_runtime, safe_runtime_path, validate_bundle, validate_identity, validate_manifest
@@ -54,6 +55,99 @@ class CommonTests(unittest.TestCase):
             with self.assertRaises(ReleaseError):
                 safe_extract_runtime(bundle / ARCHIVE, destination, manifest)
             self.assertEqual((destination / "server.js").read_text(), "do not replace")
+
+    def test_archive_graph_rejects_escape_cycles_missing_targets_and_link_ancestors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle, _manifest, _anchor = fixture_bundle(root)
+            cases = [
+                [("alias", tarfile.SYMTYPE, "../outside")],
+                [("alias", tarfile.SYMTYPE, "/etc/passwd")],
+                [("alias", tarfile.SYMTYPE, "node_modules/missing")],
+                [("alias", tarfile.SYMTYPE, ".env.local")],
+                [("a", tarfile.SYMTYPE, "b"), ("b", tarfile.SYMTYPE, "a")],
+                [("alias", tarfile.SYMTYPE, "node_modules/tiny"), ("alias/child.js", tarfile.REGTYPE, b"do not write")],
+                [("a", tarfile.DIRTYPE, None), ("b", tarfile.DIRTYPE, None), ("a/link", tarfile.SYMTYPE, "../b"), ("b/link", tarfile.SYMTYPE, "../a")],
+                [("alias", tarfile.LNKTYPE, "server.js")],
+                [("alias", tarfile.SYMTYPE, "node_modules/tiny"), ("chain", tarfile.SYMTYPE, "alias/../../../outside")],
+                # Lexical normpath yields node_modules/outside (apparently
+                # internal), but following alias first reaches public and the
+                # second '..' escapes the runtime. Resolve component by component.
+                [("node_modules/tiny/alias", tarfile.SYMTYPE, "../../public"),
+                 ("chain", tarfile.SYMTYPE, "node_modules/tiny/alias/../../outside")],
+            ]
+            for index, additions in enumerate(cases):
+                with self.subTest(index=index):
+                    archive = root / ("invalid-" + str(index) + ".tar.gz")
+                    rewrite_archive(bundle / ARCHIVE, archive, additions)
+                    destination = root / ("reject-" + str(index))
+                    with self.assertRaises(ReleaseError):
+                        safe_extract_runtime(archive, destination)
+                    self.assertFalse(destination.exists())
+
+    def test_chain_targets_are_resolved_before_dotdot_and_links_are_created_last(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle, _manifest, _anchor = fixture_bundle(root)
+            archive = root / "linked.tar.gz"
+            # Node-like aliases precede their targets in tar order. The second
+            # target uses '..' after following a link into a different directory.
+            additions = [("alias", tarfile.SYMTYPE, "node_modules/tiny"),
+                         ("chain", tarfile.SYMTYPE, "alias/../tiny/package.json")]
+            rewrite_archive(bundle / ARCHIVE, archive, additions, prepend=True)
+            destination = root / "runtime"
+            safe_extract_runtime(archive, destination)
+            self.assertTrue((destination / "alias").is_symlink())
+            self.assertEqual((destination / "chain").read_bytes(), (destination / "node_modules/tiny/package.json").read_bytes())
+
+    def test_header_count_and_expanded_size_are_limited_during_iteration(self):
+        class Headers:
+            def __init__(self, size=0):
+                self.seen = []
+                self.size = size
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def __iter__(self):
+                for index in range(10):
+                    self.seen.append(index)
+                    if index > 2:
+                        raise AssertionError("read past the member limit")
+                    member = tarfile.TarInfo("file-" + str(index))
+                    member.size = self.size
+                    yield member
+        headers = Headers()
+        with patch("common.tarfile.open", return_value=headers), patch("common.MAX_ARCHIVE_MEMBERS", 2):
+            with self.assertRaisesRegex(ReleaseError, "file count"):
+                inspect_archive("unused")
+        self.assertEqual(headers.seen, [0, 1, 2])
+        headers = Headers(size=11)
+        with patch("common.tarfile.open", return_value=headers), patch("common.MAX_EXPANDED_BYTES", 10):
+            with self.assertRaisesRegex(ReleaseError, "too large"):
+                inspect_archive("unused")
+        self.assertEqual(headers.seen, [0])
+
+
+def rewrite_archive(source, destination, additions, prepend=False):
+    with tarfile.open(source, "r:gz") as original, tarfile.open(destination, "w:gz") as output:
+        def extra():
+            for name, kind, value in additions:
+                member = tarfile.TarInfo(name)
+                member.type = kind
+                if kind in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
+                    member.linkname = value
+                if kind == tarfile.REGTYPE:
+                    member.size = len(value)
+                    output.addfile(member, io.BytesIO(value))
+                else:
+                    output.addfile(member)
+        if prepend:
+            extra()
+        for member in original:
+            output.addfile(member, original.extractfile(member) if member.isfile() else None)
+        if not prepend:
+            extra()
 
 
 if __name__ == "__main__":

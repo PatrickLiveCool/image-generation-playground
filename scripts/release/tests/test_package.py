@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -55,14 +57,43 @@ class PackageTests(unittest.TestCase):
                 names = archive.getnames()
                 self.assertIn("public/logo.png", names)
                 self.assertIn(".next/static/test.css", names)
-                self.assertIn("node_modules/alias/package.json", names)
+                self.assertIn("node_modules/alias", names)
                 self.assertNotIn(".next/cache/private", names)
-                self.assertFalse(any(member.issym() or member.islnk() for member in archive))
+                self.assertTrue(archive.getmember("node_modules/alias").issym())
+                self.assertFalse(any(member.islnk() for member in archive))
             sbom = json.loads((output / "sbom.spdx.json").read_text())
             self.assertEqual({item["name"] for item in sbom["packages"]}, {"qintopia-image", "tiny"})
             destination = Path(temporary) / "runtime"
             safe_extract_runtime(output / ARCHIVE, destination, manifest)
             self.assertEqual(json.loads((destination / "release.json").read_text())["revision"], REV)
+            self.assertTrue((destination / "node_modules/alias").is_symlink())
+
+    @unittest.skipUnless(shutil.which("node"), "Node is not installed")
+    def test_pnpm_alias_keeps_realpath_dependency_resolution_after_pack_and_extract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = make_source(root / "source")
+            traced = source / ".next/standalone"
+            package = traced / "node_modules/.pnpm/next@1.0.0/node_modules/next"
+            sibling = package.parent / "styled-jsx"
+            package.mkdir(parents=True)
+            sibling.mkdir()
+            (package / "package.json").write_text(json.dumps({"name": "next", "version": "1.0.0", "main": "index.js"}))
+            (package / "index.js").write_text("module.exports = require('styled-jsx');\n")
+            (sibling / "package.json").write_text(json.dumps({"name": "styled-jsx", "version": "1.0.0", "main": "index.js"}))
+            (sibling / "index.js").write_text("module.exports = 'sibling dependency found';\n")
+            (traced / "node_modules/next").symlink_to(".pnpm/next@1.0.0/node_modules/next")
+            command = ["node", "-e", "console.log(require('next'))"]
+            before = subprocess.run(command, cwd=traced, capture_output=True, text=True, timeout=10)
+            self.assertEqual(before.returncode, 0, before.stderr)
+            result = package_bundle(source, root / "bundle", "v0.1.0", REV, built_at=BUILT, verify_source=False)
+            manifest = validate_bundle(root / "bundle", result["manifestSha256"], "v0.1.0", REV)
+            runtime = root / "runtime"
+            safe_extract_runtime(root / "bundle" / ARCHIVE, runtime, manifest)
+            after = subprocess.run(command, cwd=runtime, capture_output=True, text=True, timeout=10)
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertEqual(after.stdout, before.stdout)
+            self.assertTrue((runtime / "node_modules/next").is_symlink())
 
     def test_external_symlink_and_private_runtime_file_fail_closed(self):
         for dangerous in ("outside-link", ".env.local", ".generated-images"):

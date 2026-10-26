@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from common import (APPLICATION, ARCHIVE, METADATA_FIELDS, ReleaseError, inspect_archive,
-                    json_bytes, require, safe_extract_runtime, safe_runtime_path,
+                    json_bytes, require, safe_extract_runtime, safe_runtime_path, safe_relative_link,
                     sha256_file, utcnow, validate_bundle, validate_identity, validate_policy)
 
 
@@ -40,12 +40,31 @@ def validate_source(source, version, revision):
 
 
 def materialize(source, target, allowed_root, ancestry=()):
-    """Copy traced dependencies, resolving only links confined to the traced root."""
-    resolved = source.resolve(strict=True)
+    """Copy traced files while preserving relocatable, internal pnpm aliases."""
+    try:
+        resolved = source.resolve(strict=True)
+    except (RuntimeError, OSError):
+        raise ReleaseError("runtime symlink is cyclic or has a missing target") from None
     require(resolved.is_relative_to(allowed_root), "runtime symlink escapes its traced root")
-    require(resolved not in ancestry, "runtime symlink cycle")
     relative = target.relative_to(materialize.runtime_root).as_posix()
     safe_runtime_path(relative)
+    for parent in target.parents:
+        if parent == materialize.runtime_root:
+            break
+        require(not parent.is_symlink(), "runtime copy cannot descend through a symlink")
+    if source.is_symlink():
+        link = safe_relative_link(os.readlink(source))
+        resolved_relative = resolved.relative_to(allowed_root).as_posix()
+        require(resolved_relative != ".", "runtime symlink creates a directory cycle")
+        safe_runtime_path(resolved_relative)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        if target.exists() or target.is_symlink():
+            require(target.is_symlink() and os.readlink(target) == link, "runtime overlay has conflicting links")
+        else:
+            target.symlink_to(link)
+        return
+    require(resolved not in ancestry, "runtime directory cycle")
+    require(not target.is_symlink(), "runtime overlay cannot replace a symlink with payload")
     if resolved.is_dir():
         target.mkdir(parents=True, exist_ok=True, mode=0o755)
         for child in sorted(source.iterdir()):

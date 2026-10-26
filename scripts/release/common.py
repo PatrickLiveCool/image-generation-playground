@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import tarfile
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -19,6 +20,8 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 METADATA_FIELDS = {"schema", "application", "version", "revision", "platform", "builtAt", "browserWorkspaceSchema", "assetCapabilityVersion"}
 MANIFEST_FIELDS = METADATA_FIELDS | {"databaseMode", "rollbackCompatibility", "archiveSha256", "sbomSha256", "releasePolicySha256"}
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_LINK_HOPS = 40
 
 
 class ReleaseError(RuntimeError):
@@ -90,7 +93,7 @@ def validate_manifest(value, version=None, revision=None):
 
 
 def safe_runtime_path(name):
-    require(isinstance(name, str) and name and "\x00" not in name and "\\" not in name, "invalid archive path")
+    require(isinstance(name, str) and 0 < len(name) <= 4096 and not any(character in name for character in ("\x00", "\\", "\n", "\r")), "invalid archive path")
     path = PurePosixPath(name)
     require(path.parts and not path.is_absolute() and ".." not in path.parts and path.as_posix() == name.rstrip("/"), "archive path escapes runtime")
     forbidden = {".git", ".local-ops", ".generated-images", ".aws", ".codex", ".agents", "image-playground", "uploads", "user-data"}
@@ -100,27 +103,109 @@ def safe_runtime_path(name):
     return path
 
 
-def inspect_archive(archive, expected_manifest=None):
+def safe_relative_link(target):
+    require(isinstance(target, str) and 0 < len(target) <= 4096 and not any(character in target for character in ("\x00", "\\", "\n", "\r")), "invalid runtime symlink target")
+    require(not PurePosixPath(target).is_absolute() and not re.match(r"^[A-Za-z]:", target), "runtime symlink target must be relative")
+    return target
+
+
+def validate_member_graph(members):
+    """Resolve links using the archive's own tree, never the host filesystem."""
+    nodes = {".": "dir"}
+    links = {}
+    for name, member in members.items():
+        nodes[name] = "link" if member.issym() else "dir" if member.isdir() else "file"
+        if member.issym():
+            links[name] = safe_relative_link(member.linkname)
+    for name in members:
+        for parent in PurePosixPath(name).parents:
+            key = parent.as_posix()
+            require(nodes.get(key, "dir") == "dir", "archive member has a link or file ancestor")
+            nodes.setdefault(key, "dir")
+
+    def resolve_link(name):
+        current = list(PurePosixPath(name).parent.parts)
+        pending = deque(links[name].split("/"))
+        hops = 1
+        while pending:
+            require(nodes.get("/".join(current) or ".") == "dir", "runtime symlink traverses a file")
+            part = pending.popleft()
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                require(current, "runtime symlink escapes the runtime")
+                current.pop()
+                continue
+            candidate = "/".join([*current, part])
+            safe_runtime_path(candidate)
+            require(candidate in nodes, "runtime symlink target is missing")
+            if nodes[candidate] == "link":
+                hops += 1
+                require(hops <= MAX_LINK_HOPS, "runtime symlink cycle or excessive link chain")
+                # Resolve '..' after any intervening link, matching filesystem
+                # semantics instead of prematurely normalizing the raw string.
+                pending.extendleft(reversed(links[candidate].split("/")))
+            else:
+                current.append(part)
+        return "/".join(current) or "."
+
+    resolved = {name: resolve_link(name) for name in links}
+    # Also reject directory cycles such as a/link -> ../b and b/link -> ../a.
+    # Link-chain resolution alone does not see those containment cycles.
+    edges = {name: set() for name, kind in nodes.items() if kind == "dir"}
+    for name, kind in nodes.items():
+        if name == ".":
+            continue
+        parent = PurePosixPath(name).parent.as_posix()
+        if kind == "dir":
+            edges[parent].add(name)
+        elif kind == "link" and nodes[resolved[name]] == "dir":
+            edges[parent].add(resolved[name])
+    incoming = dict.fromkeys(edges, 0)
+    for children in edges.values():
+        for child in children:
+            incoming[child] += 1
+    ready = deque(name for name, count in incoming.items() if count == 0)
+    visited = 0
+    while ready:
+        name = ready.popleft()
+        visited += 1
+        for child in edges[name]:
+            incoming[child] -= 1
+            if incoming[child] == 0:
+                ready.append(child)
+    require(visited == len(edges), "runtime symlink creates a directory cycle")
+    return resolved
+
+
+def _inspect_archive(archive, expected_manifest=None):
     if expected_manifest is not None:
         validate_manifest(expected_manifest)
         require(sha256_file(archive) == expected_manifest["archiveSha256"], "archive digest mismatch")
     try:
         with tarfile.open(archive, "r:gz") as bundle:
-            members = bundle.getmembers()
-            require(0 < len(members) <= 100_000, "invalid runtime file count")
-            seen, total = set(), 0
-            for member in members:
+            members, metadata_bytes, total = {}, {}, 0
+            # Enforce limits as headers arrive. getmembers() would allocate the
+            # whole untrusted member list before the count could be checked.
+            for member in bundle:
+                require(len(members) < MAX_ARCHIVE_MEMBERS, "invalid runtime file count")
                 path = safe_runtime_path(member.name)
-                require(str(path) not in seen, "duplicate archive path")
-                seen.add(str(path))
-                require(member.isfile() or member.isdir(), "runtime links and special files are prohibited")
+                name = path.as_posix()
+                require(name not in members, "duplicate archive path")
+                require(member.type in {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE, tarfile.SYMTYPE} and not member.sparse, "runtime hard links and special files are prohibited")
+                require(member.size >= 0 and (member.isfile() or member.size == 0), "invalid runtime member size")
                 total += member.size
                 require(total <= MAX_EXPANDED_BYTES, "runtime archive is too large")
-            require({"server.js", "package.json", "release.json", "release-policy.json"} <= seen, "runtime entry files are missing")
+                members[name] = member
+                if name in {"release.json", "release-policy.json"}:
+                    require(member.isfile() and member.size <= 64 * 1024, "runtime metadata is too large or is a link")
+                    metadata_bytes[name] = bundle.extractfile(member).read(64 * 1024 + 1)
+            require(members, "runtime archive is empty")
+            required = {"server.js", "package.json", "release.json", "release-policy.json"}
+            require(required <= members.keys() and all(members[name].isfile() for name in required), "runtime entry files are missing or linked")
+            validate_member_graph(members)
             def read_json(name):
-                member = bundle.getmember(name)
-                require(member.isfile() and member.size <= 64 * 1024, "runtime metadata is too large")
-                data = bundle.extractfile(member).read()
+                data = metadata_bytes[name]
                 return json.loads(data), data
             metadata, _ = read_json("release.json")
             policy, policy_bytes = read_json("release-policy.json")
@@ -130,27 +215,40 @@ def inspect_archive(archive, expected_manifest=None):
                 require(hashlib.sha256(policy_bytes).hexdigest() == expected_manifest["releasePolicySha256"], "runtime policy digest mismatch")
                 require(policy["rollbackCompatibility"] == expected_manifest["rollbackCompatibility"], "runtime rollback policy mismatch")
             validate_policy(policy, metadata["version"])
-            return metadata
+            return metadata, list(members.values())
     except (tarfile.TarError, OSError, KeyError, ValueError, UnicodeError):
         raise ReleaseError("invalid runtime archive") from None
 
 
+def inspect_archive(archive, expected_manifest=None):
+    return _inspect_archive(archive, expected_manifest)[0]
+
+
 def safe_extract_runtime(archive, target, expected_manifest=None):
-    inspect_archive(archive, expected_manifest)
+    _metadata, members = _inspect_archive(archive, expected_manifest)
     destination = Path(target)
     require(not destination.is_symlink(), "runtime destination is a symlink")
     require(not destination.exists() or (destination.is_dir() and not any(destination.iterdir())), "runtime destination must be empty")
     destination.mkdir(parents=True, exist_ok=True, mode=0o755)
     with tarfile.open(archive, "r:gz") as bundle:
-        for member in bundle.getmembers():
+        # No filesystem link exists during payload extraction. Every path and
+        # link ancestor was validated together, independently of tar order.
+        for member in members:
             path = destination.joinpath(*safe_runtime_path(member.name).parts)
             if member.isdir():
                 path.mkdir(parents=True, exist_ok=True, mode=0o755)
-            else:
+            elif member.isfile():
                 path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
                 with bundle.extractfile(member) as source, path.open("xb") as output:
                     shutil.copyfileobj(source, output)
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
+        # Preserve pnpm realpaths: Node resolves a package's dependencies from
+        # its real directory, so materializing aliases changes runtime behavior.
+        for member in members:
+            if member.issym():
+                path = destination.joinpath(*safe_runtime_path(member.name).parts)
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                path.symlink_to(member.linkname)
     return destination
 
 
