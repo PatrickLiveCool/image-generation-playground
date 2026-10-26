@@ -1,502 +1,262 @@
 "use client"
-import { useRouter } from "next/navigation"
+
 import dynamic from "next/dynamic"
-import type { ReactElement } from "react"
-import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from "react"
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react"
+import type { ClipboardEvent, DragEvent, ReactElement } from "react"
+import { Settings2 } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { useImageUpload } from "./hooks/use-image-upload"
-import { useImageGeneration } from "./hooks/use-image-generation"
+import { resolveModelMapping } from "@/lib/model-mappings"
+import { prepareReference } from "@/lib/prepare-reference"
+import type { Creation, CreationDraft } from "@/lib/creation-types"
+import { useApiSettings } from "./hooks/use-api-settings"
+import { useCreativeWorkspace, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
+import { useCreationGeneration } from "./hooks/use-creation-generation"
 import { useAspectRatio } from "./hooks/use-aspect-ratio"
 import { useImageActions } from "./hooks/use-image-actions"
-import { useKeyboardShortcuts } from "./hooks/use-keyboard-shortcuts"
-import { useDragDrop } from "./hooks/use-drag-drop"
-import { usePasteHandler } from "./hooks/use-paste-handler"
-import { useResizablePanels } from "./hooks/use-resizable-panels"
-import { usePersistentHistory } from "./hooks/use-persistent-history"
 import { InputSection } from "./input-section"
 import { OutputSection } from "./output-section"
+import { CreationList } from "./creation-list"
+import { CreationHistory } from "./creation-history"
+import { ApiSettingsModal } from "./api-settings-modal"
 import { ToastNotification } from "./toast-notification"
-import { GenerationHistory } from "./generation-history"
-import { GlobalDropZone } from "./global-drop-zone"
-import type { ModelType, ThinkingLevel, Resolution, Quality } from "./types"
-import { DEFAULT_MODEL_ID } from "./model-catalog"
-import { useDraftState, getSavedDraft, clearDraft } from "./hooks/use-draft-state"
 
-type AspectRatio = string
-
-// Dithering shader — imported directly for instant render (no lazy flash)
-const Dithering = dynamic(
-  () => import("@paper-design/shaders-react").then((mod) => ({ default: mod.Dithering })),
-  { ssr: false, loading: () => <div className="w-full h-full bg-black" /> }
-)
+const Dithering = dynamic(() => import("@paper-design/shaders-react").then(mod => ({ default: mod.Dithering })), { ssr: false })
 const MemoizedDithering = memo(Dithering)
+const HowItWorksModal = lazy(() => import("./how-it-works-modal").then(mod => ({ default: mod.HowItWorksModal })))
+const FullscreenViewer = lazy(() => import("./fullscreen-viewer").then(mod => ({ default: mod.FullscreenViewer })))
+const noop = () => {}
 
-// Modals are only shown on user interaction - no need to load them upfront
-const HowItWorksModal = lazy(() => import("./how-it-works-modal").then((mod) => ({ default: mod.HowItWorksModal })))
-const FullscreenViewer = lazy(() => import("./fullscreen-viewer").then((mod) => ({ default: mod.FullscreenViewer })))
+type Toast = (message: string, type?: "success" | "error") => void
+
+function useFilePreview(file: File | null) {
+  const [preview, setPreview] = useState("")
+  useEffect(() => {
+    if (!file) { setPreview(""); return }
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+  return preview
+}
 
 export function ImageCombiner(): ReactElement {
-  const isMobile = useIsMobile()
-  const router = useRouter()
-
-  // UI State — restore from draft if available
-  const [prompt, setPrompt] = useState("")
-  const [useUrls, setUseUrls] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<ModelType>(DEFAULT_MODEL_ID as ModelType)
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("minimal")
-  const [resolution, setResolution] = useState<Resolution>("1K")
-  const [quality, setQuality] = useState<Quality>("auto")
-  const [useGrounding, setUseGrounding] = useState(false)
-  const draftRef = useRef<ReturnType<typeof getSavedDraft>>(null)
+  const api = useApiSettings()
+  const workspace = useCreativeWorkspace()
+  const [showApiSettings, setShowApiSettings] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
-  const [showHowItWorks, setShowHowItWorks] = useState(false)
-  const [logoLoaded, setLogoLoaded] = useState(false)
-
-  const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
-
-  const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const showToast = useCallback<Toast>((message, type = "success") => {
+    clearTimeout(toastTimer.current)
     setToast({ message, type })
-    setTimeout(() => setToast(null), 3000)
+    toastTimer.current = setTimeout(() => setToast(null), 5000)
   }, [])
-
-  // Aspect Ratio
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("square")
-  const { availableAspectRatios, detectAspectRatio, closestAvailable } = useAspectRatio(selectedModel)
-  const imageLoadCountRef = useRef(0)
-
-  // When the model changes, snap to the closest aspect ratio it supports.
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
+  const generation = useCreationGeneration(workspace, api.settings, api.mappings, showToast)
+  const uploadTokens = useRef(new Map<string, symbol>())
+  const [uploads, setUploads] = useState<string[]>([])
+  const mounted = useRef(true)
   useEffect(() => {
-    setAspectRatio((current) => closestAvailable(current))
-  }, [selectedModel, closestAvailable])
-
-  // Image Upload
-  const {
-    image1,
-    image1Preview,
-    image1Url,
-    image2,
-    image2Preview,
-    image2Url,
-    handleImageUpload,
-    handleUrlChange,
-    clearImage,
-    restoreImageFromDataUrl,
-    showToast: uploadShowToast,
-  } = useImageUpload({
-    onImageLoaded: (width, height, imageNumber) => {
-      // Only auto-detect aspect ratio from the first image uploaded;
-      // the second image should not override the user's current ratio.
-      if (imageLoadCountRef.current === 0) {
-        const detectedRatio = detectAspectRatio(width, height)
-        setAspectRatio(detectedRatio)
-      }
-      imageLoadCountRef.current++
-    },
-  })
-
-  // Restore draft on mount (client-only, avoids SSR mismatch)
-  const draftRestored = useRef(false)
-  useEffect(() => {
-    if (draftRestored.current) return
-    draftRestored.current = true
-    const draft = getSavedDraft()
-    draftRef.current = draft
-    if (!draft) return
-    if (draft.prompt) setPrompt(draft.prompt)
-    if (draft.aspectRatio) setAspectRatio(draft.aspectRatio as AspectRatio)
-    if (draft.selectedModel) setSelectedModel(draft.selectedModel)
-    if (draft.thinkingLevel) setThinkingLevel(draft.thinkingLevel)
-    if (draft.resolution) setResolution(draft.resolution)
-    if (draft.useGrounding) setUseGrounding(draft.useGrounding)
-    if (draft.useUrls) {
-      setUseUrls(true)
-      if (draft.image1Url) handleUrlChange(draft.image1Url, 1)
-      if (draft.image2Url) handleUrlChange(draft.image2Url, 2)
-    } else {
-      if (draft.image1Preview) restoreImageFromDataUrl(draft.image1Preview, 1)
-      if (draft.image2Preview) restoreImageFromDataUrl(draft.image2Preview, 2)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    mounted.current = true
+    return () => { mounted.current = false; uploadTokens.current.clear() }
   }, [])
+  const refreshUploads = useCallback(() => { if (mounted.current) setUploads([...uploadTokens.current.keys()]) }, [])
+  const { getCreation, patchDraft } = workspace
 
-  // Auto-save draft on changes
-  useDraftState({
-    prompt,
-    aspectRatio,
-    selectedModel,
-    thinkingLevel,
-    resolution,
-    useGrounding,
-    useUrls,
-    image1Url,
-    image2Url,
-    image1Preview,
-    image2Preview,
-  })
-
-  // Persistent History
-  const {
-    generations: persistedGenerations,
-    setGenerations: setPersistedGenerations,
-    addGeneration,
-    clearHistory,
-    deleteGeneration,
-    isLoading: historyLoading,
-    hasInitiallyLoaded,
-    hasMore,
-    loadMore,
-    isLoadingMore,
-  } = usePersistentHistory(showToast)
-
-  // Image Generation
-  const {
-    selectedGenerationId,
-    setSelectedGenerationId,
-    imageLoaded,
-    setImageLoaded,
-    generateImage: runGeneration,
-    cancelGeneration,
-    loadGeneratedAsInput,
-    markGenerationComplete,
-  } = useImageGeneration({
-    prompt,
-    aspectRatio,
-    image1,
-    image2,
-    image1Url,
-    image2Url,
-    useUrls,
-    selectedModel,
-    thinkingLevel,
-    resolution,
-    quality,
-    useGrounding,
-    generations: persistedGenerations,
-    setGenerations: setPersistedGenerations,
-    addGeneration,
-    onToast: showToast,
-    onImageUpload: handleImageUpload,
-  })
-
-  // Derived state
-  const selectedGeneration = persistedGenerations.find((g) => g.id === selectedGenerationId) || persistedGenerations[0]
-  const isLoading = persistedGenerations.some((g) => g.status === "loading")
-  const generatedImage =
-    selectedGeneration?.status === "complete" && selectedGeneration.imageUrl
-      ? { url: selectedGeneration.imageUrl, prompt: selectedGeneration.prompt }
-      : null
-  const hasImages = !!(useUrls ? image1Url || image2Url : image1 || image2)
-  const currentMode = hasImages ? "image-editing" : "text-to-image"
-  const canGenerate = prompt.trim().length > 0 && (currentMode === "text-to-image" || !!(useUrls ? image1Url : image1))
-
-  // Image Actions (fullscreen, download, copy, etc.)
-  const {
-    showFullscreen,
-    fullscreenImageUrl,
-    setFullscreenImageUrl,
-    openFullscreen,
-    closeFullscreen,
-    downloadImage,
-    openImageInNewTab,
-    copyImageToClipboard,
-  } = useImageActions({
-    isMobile: isMobile || false,
-    currentMode,
-    onToast: showToast,
-  })
-
-  // Resizable Panels
-  const { leftWidth, hasResized, containerRef, handleMouseDown, handleDoubleClick } = useResizablePanels()
-
-  // Drag & Drop
-  const { isDraggingOver, dropZoneHover, setDropZoneHover, handleGlobalDrop } = useDragDrop({
-    onImageUpload: handleImageUpload,
-    setUseUrls,
-    onToast: showToast,
-  })
-
-  // Paste Handler
-  const { handlePromptPaste } = usePasteHandler({
-    image1,
-    image2,
-    image1Url,
-    image2Url,
-    useUrls,
-    setUseUrls,
-    onImageUpload: handleImageUpload,
-    onUrlChange: handleUrlChange,
-    onToast: showToast,
-  })
-
-  // Keyboard Shortcuts
-  const { handleKeyDown } = useKeyboardShortcuts({
-    canGenerate,
-    showFullscreen,
-    fullscreenImageUrl,
-    generatedImage,
-    persistedGenerations,
-    onGenerate: runGeneration,
-    onCopyImage: () => copyImageToClipboard(generatedImage),
-    onDownloadImage: () => downloadImage(generatedImage),
-    onLoadAsInput: loadGeneratedAsInput,
-    onCloseFullscreen: closeFullscreen,
-    setFullscreenImageUrl,
-    setSelectedGenerationId,
-  })
-
-  // Auto-select first generation on load
-  useEffect(() => {
-    if (!historyLoading && persistedGenerations.length > 0 && !selectedGenerationId) {
-      const firstCompleted = persistedGenerations.find((g) => g.status === "complete")
-      if (firstCompleted) {
-        setSelectedGenerationId(firstCompleted.id)
-      }
+  const clearImage = useCallback((creationId: string, slot: 1 | 2) => {
+    uploadTokens.current.delete(`${creationId}:${slot}`)
+    refreshUploads()
+    patchDraft(creationId, slot === 1 ? { image1: null, image1Url: "" } : { image2: null, image2Url: "" })
+  }, [patchDraft, refreshUploads])
+  const upload = useCallback(async (creationId: string, file: File, slot: 1 | 2) => {
+    const creation = getCreation(creationId)
+    if (!creation || creation.versions.some(version => version.status === "loading")) return
+    if (creation.selectedVersionId && slot === 2) { showToast("修改当前图片时，只能添加一张补充参考图。", "error"); return }
+    const key = `${creationId}:${slot}`
+    const token = Symbol(key)
+    uploadTokens.current.set(key, token)
+    refreshUploads()
+    try {
+      const prepared = await prepareReference(file)
+      if (!mounted.current || uploadTokens.current.get(key) !== token) return
+      // The creation and slot are captured before conversion, even if the user switches away.
+      const latest = getCreation(creationId)
+      if (!latest || latest.versions.some(version => version.status === "loading")) return
+      patchDraft(creationId, {
+        ...(latest.draft.useUrls ? { image1Url: "", image2Url: "", image1: null, image2: null } : {}),
+        useUrls: false,
+        ...(slot === 1 ? { image1: prepared, image1Url: "" } : { image2: prepared, image2Url: "" }),
+      })
+    } catch (error) {
+      if (uploadTokens.current.get(key) === token) showToast(error instanceof Error ? error.message : "读取图片失败。", "error")
+    } finally {
+      if (uploadTokens.current.get(key) === token) uploadTokens.current.delete(key)
+      refreshUploads()
     }
-  }, [historyLoading, persistedGenerations, selectedGenerationId, setSelectedGenerationId])
+  }, [getCreation, patchDraft, refreshUploads, showToast])
 
-  // Keep imageLoaded in sync — no fade transition on selection change
-  useEffect(() => {
-    if (selectedGeneration?.status === "complete" && selectedGeneration?.imageUrl) {
-      setImageLoaded(true)
-    }
-  }, [selectedGenerationId, selectedGeneration?.imageUrl, setImageLoaded])
-
-  // Initialize upload toast ref
-  useEffect(() => {
-    uploadShowToast.current = showToast
-  }, [showToast])
-
-  const clearAll = useCallback(() => {
-    setPrompt("")
-    clearImage(1)
-    clearImage(2)
-    clearDraft()
-    imageLoadCountRef.current = 0
-    setTimeout(() => {
-      promptTextareaRef.current?.focus()
-    }, 0)
-  }, [clearImage])
-
-  const handleFullscreenNavigate = useCallback(
-    (direction: "prev" | "next") => {
-      const completedGenerations = (persistedGenerations ?? []).filter((g) => g.status === "complete" && g.imageUrl)
-      const currentIndex = completedGenerations.findIndex((g) => g.imageUrl === fullscreenImageUrl)
-      if (currentIndex === -1) return
-
-      let newIndex: number
-      if (direction === "prev") {
-        newIndex = currentIndex === 0 ? completedGenerations.length - 1 : currentIndex - 1
-      } else {
-        newIndex = currentIndex === completedGenerations.length - 1 ? 0 : currentIndex + 1
-      }
-
-      setFullscreenImageUrl(completedGenerations[newIndex].imageUrl!)
-      setSelectedGenerationId(completedGenerations[newIndex].id)
-    },
-    [persistedGenerations, fullscreenImageUrl, setFullscreenImageUrl, setSelectedGenerationId],
-  )
+  const submit = useCallback((creationId: string) => {
+    if ([...uploadTokens.current.keys()].some(key => key.startsWith(`${creationId}:`))) return
+    void generation.generate(creationId)
+  }, [generation.generate])
+  const newCreation = () => {
+    const draft = workspace.activeCreation?.draft
+    workspace.createCreation(draft ? { selectedMappingId: draft.selectedMappingId, aspectRatio: draft.aspectRatio, quality: draft.quality } : {})
+  }
 
   return (
-    <div className="bg-background h-dvh overflow-hidden flex flex-col select-none font-sans overscroll-none touch-pan-x touch-pan-y">
-      {/* JSON-LD structured data is in layout.tsx - single source of truth for SEO */}
-
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-black font-sans text-white">
+      <div className="pointer-events-none fixed inset-0 opacity-25"><MemoizedDithering colorBack="#00000000" colorFront="#FFFFFF" speed={0.43} shape="wave" type="4x4" pxSize={3} scale={0.6} style={{ backgroundColor: "#000000", height: "100vh", width: "100vw" }} /></div>
       {toast && <ToastNotification message={toast.message} type={toast.type} />}
-
-      {isDraggingOver && (
-        <GlobalDropZone dropZoneHover={dropZoneHover} onSetDropZoneHover={setDropZoneHover} onDrop={handleGlobalDrop} />
-      )}
-
-      <div className="fixed inset-0 z-0 select-none shader-background bg-black">
-        <MemoizedDithering
-          colorBack="#00000000"
-          colorFront="#FFFFFF"
-          speed={0.43}
-          shape="wave"
-          type="4x4"
-          pxSize={3}
-          scale={0.6}
-          style={{
-            backgroundColor: "#000000",
-            height: "100vh",
-            width: "100vw",
-          }}
-        />
-      </div>
-
-      <div className="relative z-10 flex-1 min-h-0 flex flex-col items-center p-2 md:p-6 lg:p-8">
-        <div className="w-full flex-1 min-h-0 flex flex-col">
-          <div className="w-full mx-auto select-none flex-1 min-h-0 flex flex-col">
-            <div className="bg-black/90 border-0 px-2 py-2 md:px-2 md:py-2 lg:px-2 lg:py-2 flex flex-col flex-1 min-h-0 rounded-[10px]">
-              <div className="flex items-start justify-between gap-4 mb-2 md:mb-3 flex-shrink-0">
-                <div className="flex flex-col items-start">
-                  <h1 className="text-lg md:text-2xl font-bold text-white select-none leading-none">
-                    <span className="text-gray-400">v0</span> 图像生成实验室
-                  </h1>
-                  <p className="text-[9px] md:text-[10px] text-gray-400 select-none tracking-wide mt-0.5 md:mt-1">
-                    技术支持：
-                    <a
-                      href="https://vercel.com/ai-gateway"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-gray-300 transition-colors"
-                    >
-                      AI Gateway
-                    </a>
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-4 xl:gap-0 flex-1 min-h-0">
-                <div
-                  ref={containerRef}
-                  className="flex flex-col xl:flex-row gap-4 xl:gap-0 flex-1 min-h-0"
-                >
-                  <div
-                    className="flex flex-col xl:w-[35%] xl:min-w-0 xl:pl-2 xl:pr-2 xl:border-r xl:border-white/10 xl:pt-2 min-h-0"
-                    style={hasResized ? { width: `${leftWidth}%` } : undefined}
-                  >
-                    <InputSection
-                      prompt={prompt}
-                      setPrompt={setPrompt}
-                      aspectRatio={aspectRatio}
-                      setAspectRatio={setAspectRatio}
-                      availableAspectRatios={availableAspectRatios}
-                      useUrls={useUrls}
-                      setUseUrls={setUseUrls}
-                      image1Preview={image1Preview}
-                      image2Preview={image2Preview}
-                      image1={image1}
-                      image1Url={image1Url}
-                      image2Url={image2Url}
-                      canGenerate={canGenerate}
-                      hasImages={hasImages}
-                      onGenerate={runGeneration}
-                      onToast={showToast}
-                      onClearAll={clearAll}
-                      onImageUpload={handleImageUpload}
-                      onUrlChange={handleUrlChange}
-                      onClearImage={clearImage}
-                      onKeyDown={handleKeyDown}
-                      onPromptPaste={handlePromptPaste}
-                      onImageFullscreen={(url) => openFullscreen(url)}
-                      promptTextareaRef={promptTextareaRef}
-                      selectedModel={selectedModel}
-                      setSelectedModel={setSelectedModel}
-                      thinkingLevel={thinkingLevel}
-                      setThinkingLevel={setThinkingLevel}
-                      resolution={resolution}
-                      setResolution={setResolution}
-                      quality={quality}
-                      setQuality={setQuality}
-                      useGrounding={useGrounding}
-                      setUseGrounding={setUseGrounding}
-                    />
-
-                    {/* Desktop History */}
-                    <div className="hidden xl:flex xl:flex-col pt-3 flex-1 min-h-0">
-                      <GenerationHistory
-                        generations={persistedGenerations}
-                        selectedId={selectedGenerationId}
-                        onSelect={setSelectedGenerationId}
-                        onCancel={cancelGeneration}
-                        onDelete={deleteGeneration}
-                        isLoading={historyLoading}
-                        hasInitiallyLoaded={hasInitiallyLoaded}
-                        hasMore={hasMore}
-                        onLoadMore={loadMore}
-                        isLoadingMore={isLoadingMore}
-                      />
-                    </div>
-                  </div>
-
-                  <div
-                    className="hidden xl:flex items-center justify-center cursor-col-resize hover:bg-white/10 transition-colors relative group"
-                    style={{ width: "8px", flexShrink: 0 }}
-                    onMouseDown={handleMouseDown}
-                    onDoubleClick={handleDoubleClick}
-                  >
-                    <div className="w-0.5 h-8 bg-white/20 group-hover:bg-white/40 transition-colors rounded-full" />
-                  </div>
-
-                  <div
-                    className="flex flex-col xl:w-[calc(65%-8px)] xl:pl-1 xl:pr-0 flex-1 min-h-0"
-                    style={hasResized ? { width: `${100 - leftWidth}%` } : undefined}
-                  >
-                    <OutputSection
-                      selectedGeneration={selectedGeneration}
-                      generations={persistedGenerations}
-                      selectedGenerationId={selectedGenerationId}
-                      setSelectedGenerationId={setSelectedGenerationId}
-                      imageLoaded={imageLoaded}
-                      setImageLoaded={setImageLoaded}
-                      onCancelGeneration={cancelGeneration}
-                      onDeleteGeneration={deleteGeneration}
-                      onOpenFullscreen={() => generatedImage && openFullscreen(generatedImage.url)}
-                      onLoadAsInput={loadGeneratedAsInput}
-                      onCopy={() => copyImageToClipboard(generatedImage)}
-                      onDownload={() => downloadImage(generatedImage)}
-                      onOpenInNewTab={() => openImageInNewTab(generatedImage)}
-                      onImageReady={markGenerationComplete}
-                    />
-                  </div>
-                </div>
-
-                {/* Mobile History - After both sections */}
-                <div className="xl:hidden flex-shrink-0 max-h-[18vh] flex flex-col overflow-hidden">
-                  <GenerationHistory
-                    generations={persistedGenerations}
-                    selectedId={selectedGenerationId}
-                    onSelect={setSelectedGenerationId}
-                    onCancel={cancelGeneration}
-                    onDelete={deleteGeneration}
-                    isLoading={historyLoading}
-                    hasMore={hasMore}
-                    onLoadMore={loadMore}
-                    isLoadingMore={isLoadingMore}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 md:mt-4 border-t border-white/10 pt-3 pb-1 md:pt-4 md:pb-2 w-full flex items-center justify-center gap-2 sm:gap-4 text-[10px] sm:text-xs text-white/60 flex-shrink-0">
-                <a
-                  href="https://v0.app/templates/nano-banana-playground-template-hO33zwNmsQF"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-white/80 transition-colors"
-                >
-                  克隆此应用
-                </a>
-                <span className="text-white/20">•</span>
-                <button onClick={() => setShowHowItWorks(true)} className="hover:text-white/80 transition-colors">
-                  使用说明
-                </button>
-                <span className="text-white/20">•</span>
-                <a
-                  href="https://x.com/estebansuarez"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-white/80 transition-colors"
-                >
-                  @estebansuarez
-                </a>
-              </div>
-            </div>
+      <main className="relative z-10 mx-auto flex min-h-0 w-full max-w-[1900px] flex-1 flex-col p-3 md:p-5">
+        <header className="mb-4 flex shrink-0 items-center justify-between gap-3">
+          <div><h1 className="text-lg font-semibold md:text-2xl">图像生成实验室</h1><p className="mt-1 text-xs text-gray-400">{api.isConfigured ? "你的 API · 持续创作" : "配置你的 API，开始创作"}</p></div>
+          <button type="button" onClick={() => setShowApiSettings(true)} className="flex shrink-0 items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10"><Settings2 className="size-4" />API 设置</button>
+        </header>
+        {(api.storageError || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.storageError}</div>}
+        {workspace.ready && workspace.activeCreation ? (
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded-xl bg-black/90 p-3 lg:flex-row lg:overflow-hidden">
+            <aside className="shrink-0 lg:w-[200px] lg:border-r lg:border-white/10 lg:pr-3"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
+            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
           </div>
-        </div>
-      </div>
+        ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
+        <footer className="shrink-0 pt-3 text-center text-xs text-gray-400"><button type="button" onClick={() => setShowHelp(true)} className="hover:text-white">使用说明</button></footer>
+      </main>
+      <ApiSettingsModal open={showApiSettings} onOpenChange={setShowApiSettings} settings={api.settings} models={api.models} mappings={api.mappings} modelsSynced={api.modelsSynced} onSave={(settings, models, mappings, synced) => {
+        api.saveSettings(settings, models, mappings, synced)
+        showToast("API 配置已保存")
+      }} />
+      <Suspense fallback={null}>{showHelp && <HowItWorksModal open={showHelp} onOpenChange={setShowHelp} />}</Suspense>
+    </div>
+  )
+}
 
-      {/* Lazy-loaded modals - only loaded when opened */}
-      <Suspense fallback={null}>
-        {showHowItWorks && <HowItWorksModal open={showHowItWorks} onOpenChange={setShowHowItWorks} />}
-        {showFullscreen && fullscreenImageUrl && (
-          <FullscreenViewer
-            imageUrl={fullscreenImageUrl}
-            onClose={closeFullscreen}
-            onNavigate={handleFullscreenNavigate}
-            canNavigate={(persistedGenerations ?? []).filter((g) => g.status === "complete" && g.imageUrl).length > 1}
-          />
-        )}
-      </Suspense>
+interface EditorProps {
+  creation: Creation
+  workspace: CreativeWorkspaceController
+  api: ReturnType<typeof useApiSettings>
+  onOpenSettings: () => void
+  onToast: Toast
+  onUpload: (id: string, file: File, slot: 1 | 2) => Promise<void>
+  onClearImage: (id: string, slot: 1 | 2) => void
+  uploading: boolean
+  onGenerate: (id: string) => void
+  onCancel: (id: string, generationId: string) => void
+}
+
+function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onUpload, onClearImage, uploading, onGenerate, onCancel }: EditorProps) {
+  const draft = creation.draft
+  const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
+  const pending = creation.versions.find(version => version.status === "loading")
+  const selectedMapping = resolveModelMapping(api.mappings, draft.selectedMappingId)
+  const { availableAspectRatios, closestAvailable } = useAspectRatio(selectedMapping?.modelId || "", api.settings.apiMode)
+  const patch = useCallback((value: Partial<CreationDraft>) => workspace.patchDraft(creation.id, value), [creation.id, workspace.patchDraft])
+  useEffect(() => {
+    if (pending || !api.ready) return
+    const supported = closestAvailable(draft.aspectRatio)
+    if (supported !== draft.aspectRatio) patch({ aspectRatio: supported })
+  }, [closestAvailable, draft.aspectRatio, patch, pending, api.ready])
+  const file1Preview = useFilePreview(draft.image1)
+  const file2Preview = useFilePreview(draft.image2)
+  const image1Preview = draft.useUrls ? draft.image1Url : file1Preview
+  const image2Preview = draft.useUrls ? draft.image2Url : file2Preview
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const [imageLoaded, setImageLoaded] = useState(false)
+  const isMobile = useIsMobile()
+  const referenceCount = draft.useUrls ? Number(Boolean(draft.image1Url.trim())) + Number(Boolean(draft.image2Url.trim())) : Number(Boolean(draft.image1)) + Number(Boolean(draft.image2))
+  const canGenerate = api.isConfigured && Boolean(selectedMapping) && Boolean(draft.prompt.trim()) && !pending && !uploading && (!base || referenceCount <= 1)
+  const currentMode = base || referenceCount ? "image-editing" : "text-to-image"
+  const generatedImage = base?.imageUrl ? { url: base.imageUrl, prompt: base.prompt } : null
+  const actions = useImageActions({ isMobile: Boolean(isMobile), currentMode, onToast })
+  // A keyed editor may unmount when switching creations while a preview is open.
+  useEffect(() => () => { document.body.style.overflow = "" }, [])
+  const selectVersion = useCallback((id: string) => {
+    if (pending) return
+    workspace.selectVersion(creation.id, id)
+  }, [creation.id, pending, workspace.selectVersion])
+  const completed = creation.versions.filter(version => version.status === "complete" && version.imageUrl)
+  const fullscreenIsVersion = completed.some(version => version.imageUrl === actions.fullscreenImageUrl)
+  useEffect(() => {
+    if (actions.showFullscreen && fullscreenIsVersion && base?.imageUrl) actions.setFullscreenImageUrl(base.imageUrl)
+  }, [base?.id, base?.imageUrl, actions.showFullscreen, fullscreenIsVersion, actions.setFullscreenImageUrl])
+  const navigate = useCallback((direction: "prev" | "next") => {
+    if (pending) return
+    const versions = creation.versions.filter(version => version.status === "complete" && version.imageUrl)
+    const index = versions.findIndex(version => version.imageUrl === actions.fullscreenImageUrl)
+    if (index < 0 || versions.length < 2) return
+    const next = versions[(index + (direction === "prev" ? -1 : 1) + versions.length) % versions.length]
+    selectVersion(next.id)
+    actions.setFullscreenImageUrl(next.imageUrl!)
+  }, [creation.versions, actions.fullscreenImageUrl, actions.setFullscreenImageUrl, selectVersion, pending])
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = document.activeElement
+      const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+      if (event.key === "Escape" && actions.showFullscreen) actions.closeFullscreen()
+      if (typing) return
+      if (actions.showFullscreen && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault(); event.stopImmediatePropagation()
+        navigate(event.key === "ArrowLeft" ? "prev" : "next")
+      }
+      const visibleImage = actions.showFullscreen ? { url: actions.fullscreenImageUrl, prompt: "" } : generatedImage
+      if ((event.metaKey || event.ctrlKey) && event.key === "d" && visibleImage) { event.preventDefault(); void actions.downloadImage(visibleImage) }
+      if ((event.metaKey || event.ctrlKey) && event.key === "c" && visibleImage && !window.getSelection()?.toString()) { event.preventDefault(); void actions.copyImageToClipboard(visibleImage) }
+      if (event.key.toLowerCase() === "f" && generatedImage && !event.metaKey && !event.ctrlKey) actions.openFullscreen(generatedImage.url)
+    }
+    document.addEventListener("keydown", handler, true)
+    return () => document.removeEventListener("keydown", handler, true)
+  }, [actions, generatedImage, navigate])
+  const clearImage = (slot: 1 | 2) => { if (!pending) onClearImage(creation.id, slot) }
+  const clearAll = () => {
+    if (pending) return
+    onClearImage(creation.id, 1); onClearImage(creation.id, 2)
+    patch({ prompt: "" })
+    promptRef.current?.focus()
+  }
+  const changeMode = (useUrls: boolean) => {
+    if (pending || useUrls === draft.useUrls) return
+    onClearImage(creation.id, 1); onClearImage(creation.id, 2)
+    patch({ useUrls })
+  }
+  const upload = (file: File, slot: 1 | 2) => onUpload(creation.id, file, slot)
+  const uploadPasted = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (pending) return
+    const file = Array.from(event.clipboardData.items).find(item => item.type.startsWith("image/"))?.getAsFile()
+    if (!file) return
+    event.preventDefault()
+    const slot = base || !draft.image1 ? 1 : 2
+    void upload(file, slot)
+  }
+  const drop = (event: DragEvent) => {
+    if (event.defaultPrevented) return
+    event.preventDefault()
+    if (pending) return
+    const file = event.dataTransfer.files[0]
+    if (file) void upload(file, base || !draft.image1 ? 1 : 2)
+  }
+
+  return (
+    <div className="grid min-w-0 shrink-0 gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(270px,350px)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
+      <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-5 lg:overflow-y-auto lg:pr-2">
+        <InputSection mappings={api.mappings} apiMode={api.settings.apiMode} apiConfigured={api.isConfigured} onOpenApiSettings={onOpenSettings}
+          prompt={draft.prompt} setPrompt={prompt => patch({ prompt })} aspectRatio={draft.aspectRatio} setAspectRatio={aspectRatio => patch({ aspectRatio })} availableAspectRatios={availableAspectRatios}
+          selectedMappingId={draft.selectedMappingId} setSelectedMappingId={selectedMappingId => patch({ selectedMappingId })} quality={draft.quality} setQuality={quality => patch({ quality })}
+          thinkingLevel="minimal" setThinkingLevel={noop} resolution="1K" setResolution={noop} useGrounding={false} setUseGrounding={noop}
+          useUrls={draft.useUrls} setUseUrls={changeMode} image1Preview={image1Preview} image2Preview={image2Preview} image1={draft.image1} image1Url={draft.image1Url} image2Url={draft.image2Url}
+          canGenerate={canGenerate} hasImages={Boolean(base || referenceCount)} onGenerate={() => onGenerate(creation.id)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
+          onUrlChange={(url, slot) => { clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
+          onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
+          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理参考图…" : base ? `修改 V${base.version ?? 1}` : "生成图片"} />
+        {uploading && <p role="status" className="text-xs text-gray-400">正在处理参考图，可切换创作；完成后会放回当前创作。</p>}
+        <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
+      </div>
+      <div className="order-2 h-[420px] min-w-0 lg:order-none lg:h-auto lg:min-h-0">
+        <OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}
+          imageLoaded={imageLoaded} setImageLoaded={setImageLoaded} onCancelGeneration={id => onCancel(creation.id, id)} onDeleteGeneration={noop}
+          onOpenFullscreen={() => generatedImage && actions.openFullscreen(generatedImage.url)} onCopy={() => void actions.copyImageToClipboard(generatedImage)} onDownload={() => void actions.downloadImage(generatedImage)}
+          onOpenInNewTab={() => actions.openImageInNewTab(generatedImage)} onImageReady={noop} onImageError={noop} />
+      </div>
+      <Suspense fallback={null}>{actions.showFullscreen && actions.fullscreenImageUrl && <FullscreenViewer imageUrl={actions.fullscreenImageUrl} onClose={actions.closeFullscreen} onNavigate={navigate} canNavigate={!pending && fullscreenIsVersion && completed.length > 1} />}</Suspense>
     </div>
   )
 }

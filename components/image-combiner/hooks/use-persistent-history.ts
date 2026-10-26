@@ -10,7 +10,7 @@ import {
 import type { Generation } from "../types"
 
 // Browser-only history: generations are persisted to localStorage. The image
-// files live in Vercel Blob; there is no database and no auth.
+// files live in private COS; the browser stores capability URLs, not image bytes.
 export function usePersistentHistory(_onToast?: (message: string, type: "success" | "error") => void) {
   const [generations, setGenerations] = useState<Generation[]>([])
   const [isLoading, setIsLoading] = useState(true)

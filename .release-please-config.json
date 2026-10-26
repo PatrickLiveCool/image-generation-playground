@@ -1,0 +1,72 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "qintopia-image",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "draft": true,
+      "force-tag-creation": true,
+      "pull-request-title-pattern": "chore(release): release ${version}",
+      "pull-request-header": "This PR was generated with [Release Please].\n\n## 改动说明\n\nRelease Please 自动更新应用版本、CHANGELOG 和发布策略版本字段。\n\n## 验证结果\n\nImage Playground CI 会在此版本 PR 上运行 release check、类型检查、测试和构建。\n\n## 风险与回退\n\n合并版本 PR 只创建 Draft GitHub Release；只有人工 Publish 正式 Release 才会触发生产部署。",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "deploy/release-policy.json",
+          "jsonpath": "$.version"
+        }
+      ],
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "perf",
+          "section": "Performance"
+        },
+        {
+          "type": "refactor",
+          "section": "Refactoring"
+        },
+        {
+          "type": "build",
+          "section": "Build System"
+        },
+        {
+          "type": "ci",
+          "section": "CI / Deployment"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation"
+        },
+        {
+          "type": "chore",
+          "section": "Maintenance"
+        },
+        {
+          "type": "revert",
+          "section": "Reverts"
+        },
+        {
+          "type": "test",
+          "section": "Tests",
+          "hidden": true
+        },
+        {
+          "type": "style",
+          "section": "Style",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  "bootstrap-sha": "75b10d69e4ff4bbe7e4b9542df349f0223a44aac"
+}

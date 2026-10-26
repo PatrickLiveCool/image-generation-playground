@@ -1,0 +1,54 @@
+name: Image Playground PR format
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Release PR number supplied by Release Please
+        required: true
+        type: string
+      expected_head_sha:
+        description: Current release PR commit supplied by Release Please
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Editing a PR must not cancel its full code checks. Validate current metadata,
+# even when an older metadata event was queued before a later edit.
+concurrency:
+  group: qintopia-image-pr-format-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pr-format:
+    name: PR format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Validate explicitly dispatched release PR
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR_NUMBER: ${{ inputs.pull_request_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+        run: node .github/scripts/release-pr-checks.mjs validate
+      - name: Test and validate current PR metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pull_request_number || github.event.pull_request.number }}
+        run: |
+          node --test scripts/check-pr-tests.mjs
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '{pull_request: .}' > "$RUNNER_TEMP/pr-metadata.json"
+          GITHUB_EVENT_PATH="$RUNNER_TEMP/pr-metadata.json" node scripts/check-pr.mjs

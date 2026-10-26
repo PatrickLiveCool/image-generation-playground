@@ -1,11 +1,13 @@
 "use client"
 
+import type { ProviderSettings } from "@/lib/api-provider-types"
 import type React from "react"
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { Generation, GenerationPhase, ModelType, ThinkingLevel, Resolution, Quality } from "../types"
 
 interface UseImageGenerationProps {
+  providerSettings: ProviderSettings
   prompt: string
   aspectRatio: string
   image1: File | null
@@ -98,46 +100,8 @@ function adaptiveProgress(elapsedMs: number): number {
   return 90 + 9 * (1 - Math.exp(-0.5 * overtime))
 }
 
-/** Poll workflow run until completed or failed.
- *  Never gives up on transient errors — the workflow is durable, so we keep trying. */
-async function pollWorkflowStatus(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<{ status: "completed"; result: any } | { status: "failed"; error: string }> {
-  const POLL_INTERVAL = 2000
-  const MAX_POLLS = 180 // 6 minutes max (workflow can take long with retries)
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
-
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL))
-
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
-
-    try {
-      const res = await fetch(`/api/generation-status?runId=${encodeURIComponent(runId)}`, { signal })
-
-      if (!res.ok) continue // transient error — just keep polling
-
-      const data = await res.json()
-
-      if (data.status === "completed") {
-        return { status: "completed", result: data.result }
-      }
-      if (data.status === "failed") {
-        return { status: "failed", error: data.error || "生成失败" }
-      }
-      // "running" or "pending" — keep polling
-    } catch (e) {
-      if (signal?.aborted) throw e
-      // Network error — keep polling, workflow is still running
-    }
-  }
-
-  return { status: "failed", error: "生成已超过 6 分钟，等待超时" }
-}
-
 export function useImageGeneration({
+  providerSettings,
   prompt,
   aspectRatio,
   image1,
@@ -156,209 +120,16 @@ export function useImageGeneration({
   onToast,
   onImageUpload,
 }: UseImageGenerationProps) {
-  // Check for pending runs BEFORE first render to avoid flash
-  const pendingRunsRef = useRef(() => {
-    try {
-      const raw = localStorage.getItem("pending_workflow_runs")
-      if (!raw) return null
-      const runs = JSON.parse(raw) as Record<string, { generationId: string; prompt: string; aspectRatio: string; mode: string; startedAt: number }>
-      const now = Date.now()
-      const active = Object.entries(runs).filter(([, v]) => now - v.startedAt < 6 * 60 * 1000)
-      return active.length > 0 ? active : null
-    } catch { return null }
-  })
-  const initialPending = useRef(pendingRunsRef.current()).current
-
-  const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(
-    initialPending?.[0]?.[1]?.generationId || null
-  )
+  const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null)
   const [imageLoaded, setImageLoaded] = useState(false)
-  const resumeAttempted = useRef(false)
-  // Map generationId → runId for cancellation
-  const runIdMap = useRef<Map<string, string>>(new Map())
-  // Map generationId → stopProgress function so markGenerationComplete can stop the animation
+  const controllers = useRef<Map<string, AbortController>>(new Map())
   const stopProgressMap = useRef<Map<string, () => void>>(new Map())
 
-  // Inject pending loading entries into generations on first render
-  useEffect(() => {
-    if (!initialPending) return
-    for (const [runId, info] of initialPending) {
-      runIdMap.current.set(info.generationId, runId)
-      setGenerations((prev) => {
-        if (prev.some((g) => g.id === info.generationId)) return prev
-        const loadingGen: Generation = {
-          id: info.generationId,
-          status: "loading",
-          progress: 5,
-          phase: "sending",
-          imageUrl: null,
-          prompt: info.prompt,
-          timestamp: info.startedAt,
-        }
-        return [loadingGen, ...prev]
-      })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Resume pending workflow runs after page refresh
-  useEffect(() => {
-    if (resumeAttempted.current) return
-    resumeAttempted.current = true
-
-    let pendingRuns: Record<string, { generationId: string; prompt: string; aspectRatio: string; mode: string; startedAt: number }>
-    try {
-      pendingRuns = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-    } catch {
-      return
-    }
-
-    const entries = Object.entries(pendingRuns)
-    if (entries.length === 0) return
-
-    // Filter out stale runs (older than 5 minutes)
-    const now = Date.now()
-    const activeEntries = entries.filter(([, v]) => now - v.startedAt < 5 * 60 * 1000)
-    if (activeEntries.length === 0) {
-      localStorage.removeItem("pending_workflow_runs")
-      return
-    }
-
-    for (const [runId, info] of activeEntries) {
-      const { generationId, prompt: savedPrompt, aspectRatio: savedAspectRatio, mode: savedMode } = info
-
-      // Immediately check status — might already be completed
-      const resumeAsync = async () => {
-        // Quick initial poll to get real startedAt or detect completion
-        let realElapsedMs = Date.now() - info.startedAt // fallback from localStorage
-        try {
-          const res = await fetch(`/api/generation-status?runId=${encodeURIComponent(runId)}`)
-          if (res.ok) {
-            const data = await res.json()
-            if (data.status === "completed") {
-              // Already done! Set URL — component renders image behind progress,
-              // markGenerationComplete fires on onLoad for instant reveal.
-              const result = data.result
-              if (result?.url) {
-                setGenerations((prev) => {
-                  const existing = prev.find((g) => g.id === generationId)
-                  if (existing) {
-                    return prev.map((g) =>
-                      g.id === generationId
-                        ? { ...g, imageUrl: result.url, aspectRatio: savedAspectRatio, mode: savedMode }
-                        : g,
-                    )
-                  }
-                  // Not yet in list — add as loading with URL
-                  return [
-                    {
-                      id: generationId, status: "loading" as const, progress: 95, phase: "loading" as const,
-                      imageUrl: result.url, prompt: savedPrompt, timestamp: Date.now(),
-                      aspectRatio: savedAspectRatio, mode: savedMode,
-                    },
-                    ...prev,
-                  ]
-                })
-                setSelectedGenerationId(generationId)
-              }
-              // Clean up
-              try {
-                const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-                delete pending[runId]
-                localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-              } catch {}
-              return
-            }
-            if (data.status === "failed") {
-              try {
-                const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-                delete pending[runId]
-                localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-              } catch {}
-              return
-            }
-            // Running — use server startedAt for accurate progress
-            if (data.startedAt) {
-              realElapsedMs = Date.now() - new Date(data.startedAt).getTime()
-            }
-          }
-        } catch {}
-
-        // Show loading with accurate progress from real elapsed time
-        const initialProgress = adaptiveProgress(realElapsedMs)
-        const resumedGeneration: Generation = {
-          id: generationId, status: "loading", progress: initialProgress,
-          phase: getPhaseFromProgress(initialProgress),
-          imageUrl: null, prompt: savedPrompt, timestamp: info.startedAt,
-        }
-
-        setGenerations((prev) => {
-          if (prev.some((g) => g.id === generationId)) return prev
-          return [resumedGeneration, ...prev]
-        })
-        setSelectedGenerationId(generationId)
-
-        // rAF with real elapsed offset
-        let rafRunning = true
-        let rafId: number
-        const rafStart = performance.now()
-
-        const updateProgress = (currentTime: number) => {
-          if (!rafRunning) return
-          const elapsedMs = realElapsedMs + (currentTime - rafStart)
-          const progress = adaptiveProgress(elapsedMs)
-          const phase = getPhaseFromProgress(progress)
-          setGenerations((prev) =>
-            prev.map((gen) =>
-              gen.id === generationId && gen.status === "loading" ? { ...gen, progress, phase } : gen,
-            ),
-          )
-          rafId = requestAnimationFrame(updateProgress)
-        }
-        rafId = requestAnimationFrame(updateProgress)
-
-        // Continue polling
-        const pollResult = await pollWorkflowStatus(runId)
-
-        rafRunning = false
-        cancelAnimationFrame(rafId)
-
-        // Clean up localStorage
-        try {
-          const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-          delete pending[runId]
-          localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-        } catch {}
-
-        if (pollResult.status === "failed") {
-          setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
-          onToast(pollResult.error || "生成失败", "error")
-          return
-        }
-
-        const data = pollResult.result
-        if (data?.url) {
-          // Set URL while keeping status "loading" — component renders image
-          // behind progress bar. markGenerationComplete handles the rest on onLoad.
-          const stopResumedProgress = () => {
-            rafRunning = false
-            cancelAnimationFrame(rafId)
-          }
-          stopProgressMap.current.set(generationId, stopResumedProgress)
-
-          setGenerations((prev) =>
-            prev.map((gen) =>
-              gen.id === generationId && gen.status === "loading"
-                ? { ...gen, imageUrl: data.url, aspectRatio: savedAspectRatio, mode: savedMode }
-                : gen,
-            ),
-          )
-        }
-      }
-
-      resumeAsync()
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    for (const controller of controllers.current.values()) controller.abort()
+    for (const stop of stopProgressMap.current.values()) stop()
+    controllers.current.clear()
+    stopProgressMap.current.clear()
   }, [])
 
   const cancelGeneration = (generationId: string) => {
@@ -367,24 +138,10 @@ export function useImageGeneration({
       generation.abortController.abort()
     }
 
-    // Cancel the workflow server-side
-    const runId = runIdMap.current.get(generationId)
-    if (runId) {
-      fetch("/api/cancel-generation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId }),
-      }).catch(() => {})
-
-      // Clean up localStorage
-      try {
-        const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-        delete pending[runId]
-        localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-      } catch {}
-
-      runIdMap.current.delete(generationId)
-    }
+    controllers.current.get(generationId)?.abort()
+    controllers.current.delete(generationId)
+    stopProgressMap.current.get(generationId)?.()
+    stopProgressMap.current.delete(generationId)
 
     // Remove entirely — don't leave a "cancelled" thumbnail
     setGenerations((prev) => prev.filter((gen) => gen.id !== generationId))
@@ -392,6 +149,14 @@ export function useImageGeneration({
   }
 
   const generateImage = async (options?: GenerateImageOptions) => {
+    if (!providerSettings.baseUrl || !providerSettings.apiKey) {
+      onToast("请先打开 API 设置并填写 Base URL 和 Token。", "error")
+      return
+    }
+    if (!(options?.selectedModel ?? selectedModel).trim()) {
+      onToast("请选择模型或手动填写模型 ID。", "error")
+      return
+    }
     fetchExpectedDuration()
     const effectivePrompt = options?.prompt ?? prompt
     const effectiveAspectRatio = options?.aspectRatio ?? aspectRatio
@@ -428,6 +193,7 @@ export function useImageGeneration({
     for (let i = 0; i < numVariations; i++) {
       const generationId = `gen-${Date.now()}-${Math.random().toString(36).substring(7)}`
       const controller = new AbortController()
+      controllers.current.set(generationId, controller)
 
       const newGeneration: Generation = {
         id: generationId,
@@ -486,6 +252,9 @@ export function useImageGeneration({
       const generationPromise = (async () => {
         try {
           const formData = new FormData()
+          formData.append("baseUrl", providerSettings.baseUrl)
+          formData.append("apiKey", providerSettings.apiKey)
+          formData.append("apiMode", providerSettings.apiMode)
           formData.append("mode", currentMode)
           formData.append("prompt", effectivePrompt)
           formData.append("aspectRatio", effectiveAspectRatio)
@@ -511,7 +280,7 @@ export function useImageGeneration({
             }
           }
 
-          // Step 1: Start the workflow
+          // Generate through the configured relay; credentials are never added to history.
           const response = await fetch("/api/generate-image", {
             method: "POST",
             body: formData,
@@ -528,39 +297,12 @@ export function useImageGeneration({
 
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: "未知错误" }))
-            // Prefer the actionable `details` (e.g. "connect Vercel Blob") when present.
+            // Prefer actionable server details when present.
             throw new Error(errorData.details || errorData.error || "生成图像失败")
           }
 
-          const { runId } = await response.json()
-
-          // Track runId for cancellation
-          runIdMap.current.set(generationId, runId)
-
-          // rAF keeps running for smooth progress animation — poll only detects completion
-
-          // Save runId → generationId mapping so we can resume after refresh
-          try {
-            const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-            pending[runId] = { generationId, prompt: effectivePrompt, aspectRatio: effectiveAspectRatio, mode: currentMode, startedAt: Date.now() }
-            localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-          } catch {}
-
-          // Step 2: Poll for completion — no progress callback, rAF handles animation
-          const pollResult = await pollWorkflowStatus(runId, controller.signal)
-
-          // Clean up localStorage
-          try {
-            const pending = JSON.parse(localStorage.getItem("pending_workflow_runs") || "{}")
-            delete pending[runId]
-            localStorage.setItem("pending_workflow_runs", JSON.stringify(pending))
-          } catch {}
-
-          if (pollResult.status === "failed") {
-            throw new Error(pollResult.error || "生成失败")
-          }
-
-          const data = pollResult.result
+          const data = await response.json()
+          controllers.current.delete(generationId)
 
           if (data.durationMs && data.durationMs > 0) {
             expectedDurationMs = data.durationMs
@@ -584,6 +326,7 @@ export function useImageGeneration({
             stopProgressMap.current.delete(generationId)
           }
         } catch (error) {
+          controllers.current.delete(generationId)
           stopProgress()
           stopProgressMap.current.delete(generationId)
 
@@ -632,35 +375,23 @@ export function useImageGeneration({
       stopProgressMap.current.delete(generationId)
     }
 
-    let completedGen: Generation | null = null
-
-    setGenerations((prev) => {
-      const gen = prev.find((g) => g.id === generationId)
-      if (!gen || gen.status !== "loading" || !gen.imageUrl) return prev
-
-      completedGen = {
-        ...gen,
-        status: "complete" as const,
-        progress: 100,
-        phase: undefined,
-        timestamp: Date.now(),
-        abortController: undefined,
-      }
-
-      return prev.map((g) => (g.id === generationId ? completedGen! : g))
-    })
-
-    // setGenerations callback runs synchronously, so completedGen is set here
-    if (completedGen) {
-      const gen = completedGen as Generation
-      setImageLoaded(true)
-      playSuccessSound()
-      addGeneration({
-        ...gen,
-        createdAt: new Date().toISOString(),
-      } as any).catch(() => {})
+    const gen = generations.find((item) => item.id === generationId)
+    if (!gen || gen.status !== "loading" || !gen.imageUrl) return
+    const completedGen: Generation = {
+      ...gen, status: "complete", progress: 100, phase: undefined,
+      timestamp: Date.now(), abortController: undefined,
     }
-  }, [setGenerations, setImageLoaded, addGeneration])
+    setImageLoaded(true)
+    playSuccessSound()
+    addGeneration(completedGen).catch(() => {})
+  }, [generations, setImageLoaded, addGeneration])
+
+  const markGenerationFailed = useCallback((generationId: string) => {
+    stopProgressMap.current.get(generationId)?.()
+    stopProgressMap.current.delete(generationId)
+    setGenerations(prev => prev.filter(gen => gen.id !== generationId))
+    onToast("图片无法加载，接口可能返回了损坏的图片。", "error")
+  }, [setGenerations, onToast])
 
   return {
     selectedGenerationId,
@@ -671,5 +402,6 @@ export function useImageGeneration({
     cancelGeneration,
     loadGeneratedAsInput,
     markGenerationComplete,
+    markGenerationFailed,
   }
 }

@@ -1,134 +1,38 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
-import { createPortal } from "react-dom"
-import { cn } from "@/lib/utils"
-import { MODEL_CATALOG, PROVIDERS, type ModelDefinition } from "./model-catalog"
-import { ProviderLogo } from "./provider-logos"
-import type { ModelType } from "./types"
+import { useState } from "react"
+import { Check, ChevronDown } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import type { ModelMapping } from "@/lib/api-provider-types"
+import { resolveModelMapping } from "@/lib/model-mappings"
 
-interface ModelSelectorProps {
-  value: ModelType
-  onChange: (model: ModelType) => void
-}
-
-function ModelCard({ model, selected, onClick }: { model: ModelDefinition; selected: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex items-center gap-2 w-full px-2.5 py-2 text-left transition-all",
-        selected
-          ? "bg-white text-black"
-          : "text-gray-300 hover:text-white hover:bg-white/10",
-      )}
-    >
-      <span className={cn("flex-shrink-0", selected ? "text-black" : "text-white")}>
-        {ProviderLogo[model.provider as keyof typeof ProviderLogo]}
-      </span>
-      <span className="text-xs font-medium truncate flex-1">{model.name}</span>
-      {model.badge && (
-        <span className={cn(
-          "text-[9px] font-semibold px-1 py-0.5 flex-shrink-0",
-          selected ? "bg-black/15 text-black" : "bg-white/10 text-gray-400",
-        )}>
-          {model.badge}
-        </span>
-      )}
-    </button>
-  )
-}
-
-export function ModelSelector({ value, onChange }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, mappings, onOpenApiSettings }: {
+  value: string; onChange: (id: string) => void; mappings: ModelMapping[]; onOpenApiSettings: () => void
+}) {
   const [open, setOpen] = useState(false)
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 256 })
-  const btnRef = useRef<HTMLButtonElement>(null)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-  const current = MODEL_CATALOG.find((m) => m.id === value)
-
-  const updatePosition = useCallback(() => {
-    if (!btnRef.current) return
-    const rect = btnRef.current.getBoundingClientRect()
-    setDropdownStyle({
-      top: rect.bottom + 4,
-      left: rect.left,
-      width: Math.max(256, rect.width),
-    })
-  }, [])
-
-  const handleOpen = useCallback(() => {
-    updatePosition()
-    setOpen((o) => !o)
-  }, [updatePosition])
-
-  useEffect(() => {
-    if (!open) return
-    function onPointerDown(e: PointerEvent) {
-      const target = e.target as Node
-      if (btnRef.current?.contains(target) || dropdownRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    function onScroll() { updatePosition() }
-    document.addEventListener("pointerdown", onPointerDown)
-    window.addEventListener("scroll", onScroll, true)
-    window.addEventListener("resize", updatePosition)
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown)
-      window.removeEventListener("scroll", onScroll, true)
-      window.removeEventListener("resize", updatePosition)
-    }
-  }, [open, updatePosition])
-
-  const dropdown = open && (
-    <div
-      ref={dropdownRef}
-      style={{ position: "fixed", top: dropdownStyle.top, left: dropdownStyle.left, width: dropdownStyle.width, zIndex: 9999 }}
-      className="bg-black/95 border border-gray-600 shadow-xl"
-    >
-      <div className="max-h-80 overflow-y-auto">
-        {PROVIDERS.filter((p) => MODEL_CATALOG.some((m) => m.provider === p.key)).map((provider, groupIndex) => (
-          <div key={provider.key}>
-            {groupIndex > 0 && <div className="border-b border-gray-800/50" />}
-            {MODEL_CATALOG.filter((m) => m.provider === provider.key).map((model) => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                selected={value === model.id}
-                onClick={() => {
-                  onChange(model.id as ModelType)
-                  setOpen(false)
-                }}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-
+  const [query, setQuery] = useState("")
+  const selected = resolveModelMapping(mappings, value)
+  const filtered = mappings.filter(mapping => mapping.name.toLowerCase().includes(query.toLowerCase()))
   return (
-    <>
-      <button
-        ref={btnRef}
-        onClick={handleOpen}
-        aria-label="选择模型"
-        aria-expanded={open}
-        className={cn(
-          "flex items-center gap-1.5 h-7 md:h-10 px-2 md:px-3 bg-black/50 border border-gray-600 text-gray-300 hover:text-white hover:border-gray-500 transition-all max-w-[140px] md:max-w-[220px]",
-          open && "border-gray-400 text-white",
-        )}
-      >
-        {current && (
-          <span className="flex-shrink-0 text-white">
-            {ProviderLogo[current.provider as keyof typeof ProviderLogo]}
-          </span>
-        )}
-        <span className="text-xs font-medium truncate">{current?.name ?? "模型"}</span>
-        <svg className="w-3 h-3 flex-shrink-0 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={open ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
-        </svg>
-      </button>
-      {typeof document !== "undefined" && dropdown && createPortal(dropdown, document.body)}
-    </>
+    <Popover open={open} onOpenChange={next => { setOpen(next); if (next) setQuery("") }}>
+      <PopoverTrigger asChild>
+        <button aria-label="选择模型" className="flex items-center gap-1.5 h-7 md:h-10 px-2 md:px-3 bg-black/50 border border-gray-600 text-gray-300 hover:text-white max-w-[140px] md:max-w-[220px]">
+          <span className="text-xs font-medium truncate">{selected?.name || "选择模型"}</span><ChevronDown className="size-3 shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 max-w-[calc(100vw-2rem)] bg-neutral-950 border-white/20 text-white p-3 space-y-3">
+        {mappings.length > 6 && <input aria-label="搜索模型名称" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索名称" className="w-full bg-black border border-white/20 rounded px-2 py-2 text-xs select-text" />}
+        <div className="max-h-64 overflow-y-auto space-y-1">
+          {filtered.map(mapping => (
+            <button key={mapping.id} onClick={() => { onChange(mapping.id); setOpen(false) }} aria-pressed={value === mapping.id} className="w-full flex items-center gap-2 text-left text-sm p-2 rounded hover:bg-white/10">
+              <span className="break-words min-w-0 flex-1">{mapping.name}</span>{value === mapping.id && <Check className="size-3 shrink-0" />}
+            </button>
+          ))}
+          {!mappings.length && <p className="text-xs text-gray-400 leading-relaxed">还没有模型映射。先在设置里添加显示名称，并选择对应模型。</p>}
+          {!!mappings.length && !filtered.length && <p className="text-xs text-gray-400">没有匹配的名称。</p>}
+        </div>
+        <button className="text-xs text-gray-300 underline underline-offset-4" onClick={() => { setOpen(false); onOpenApiSettings() }}>管理模型映射</button>
+      </PopoverContent>
+    </Popover>
   )
 }

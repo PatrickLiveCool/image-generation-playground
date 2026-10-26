@@ -1,0 +1,2 @@
+Defaults:qintopia-image-deploy !setenv
+qintopia-image-deploy ALL=(root) NOPASSWD: /usr/local/sbin/qintopia-image-deploy deploy *, /usr/local/sbin/qintopia-image-deploy rollback *, /usr/local/sbin/qintopia-image-deploy status, /usr/local/sbin/qintopia-image-deploy maintenance, /usr/local/sbin/qintopia-image-deploy maintenance dry-run, /usr/local/sbin/qintopia-image-deploy maintenance apply

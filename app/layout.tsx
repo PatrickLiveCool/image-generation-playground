@@ -22,37 +22,32 @@ const geistPixel = localFont({
 export const metadata: Metadata = {
   title: "图像生成实验室",
   description:
-    "图像生成实验室通过 Vercel AI Gateway 集成多家服务商的 AI 模型，支持文字生成图像和参考图片编辑，可选择模型、宽高比与画质，生成的图片不添加水印。",
+    "图像生成实验室支持自定义中转 API，在设置中将自定义名称映射到实际模型，通过 Images 或 Chat Completions 兼容接口生成和编辑图片。",
   keywords: [
     "AI 图像实验室",
     "多模型图像生成",
     "AI 图像生成器",
     "AI 图像编辑器",
     "无需注册的图像生成",
-    "无水印 AI 图像",
-    "Google Gemini 图像生成",
+    "自定义 API 生图",
+    "中转 API 配置",
     "文字生成图像",
     "在线图像编辑",
     "AI 艺术创作",
-    "GPT Image",
-    "Vercel AI Gateway",
-    "v0 图像生成实验室",
+    "Images API",
+    "Chat Completions 生图",
   ],
-  authors: [{ name: "v0" }],
-  creator: "v0",
-  publisher: "v0",
-  generator: "v0.app",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://v0nanobananapro.vercel.app"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
   alternates: {
     canonical: "/",
   },
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    url: process.env.NEXT_PUBLIC_APP_URL || "https://v0nanobananapro.vercel.app",
+    url: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
     title: "图像生成实验室",
     description:
-      "多模型 AI 图像生成与编辑。输入文字描述或上传参考图片，生成不添加水印的图像。",
+      "连接自己的中转 API，选择支持生图的模型，使用文字描述或参考图片生成新图像。",
     siteName: "图像生成实验室",
     images: [
       {
@@ -67,8 +62,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "图像生成实验室",
     description:
-      "多模型 AI 图像生成与编辑。输入文字描述或上传参考图片，生成不添加水印的图像。",
-    creator: "@vercel",
+      "连接自己的中转 API，选择支持生图的模型，使用文字描述或参考图片生成新图像。",
     images: ["/opengraph-image"],
   },
   robots: {
@@ -93,7 +87,7 @@ export const viewport = {
 }
 
 function JsonLd() {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://v0nanobananapro.vercel.app"
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
   const structuredData = {
     "@context": "https://schema.org",
     "@graph": [
@@ -101,53 +95,28 @@ function JsonLd() {
         "@type": ["WebApplication", "SoftwareApplication"],
         "@id": `${appUrl}/#app`,
         name: "图像生成实验室",
-        alternateName: ["ImgGenPlayground", "图像生成实验室", "NB Pro"],
+        alternateName: ["ImgGenPlayground", "图像生成实验室"],
         url: appUrl,
         description:
-          "图像生成实验室通过 Vercel AI Gateway 提供多模型 AI 图像生成与编辑。可根据文字提示生成图像，也可上传参考图片进行编辑。无需登录，支持多种宽高比，生成结果不添加水印。",
+          "图像生成实验室通过用户配置的中转 API 生成和编辑图片。在 API 设置中读取模型列表或填写 ID，并建立自定义名称与实际模型的映射；生成界面只显示自定义名称。兼容 Images 与 Chat Completions 生图接口。",
         applicationCategory: "DesignApplication",
         applicationSubCategory: "AI 图像生成器",
         operatingSystem: "网页浏览器",
         inLanguage: "zh-CN",
         browserRequirements: "需要启用 JavaScript 的现代浏览器",
-        offers: {
-          "@type": "Offer",
-          price: "0",
-          priceCurrency: "USD",
-          availability: "https://schema.org/InStock",
-          description: "无需登录；模型调用费用由部署者的 AI Gateway 账户承担",
-        },
         featureList: [
-          "通过多家服务商的 AI 模型将文字转换为图像",
+          "通过自定义中转 API 将文字转换为图像",
+          "在页面中配置 Base URL、Token 和生图接口类型",
+          "在设置中读取模型列表或填写 ID，自由维护显示名称与实际模型的映射",
           "使用自然语言编辑图片",
           "最多上传并编辑两张参考图片",
-          "根据模型提供多种宽高比选项",
-          "支持 GPT Image 画质设置",
-          "支持 Gemini 思考深度、分辨率及搜索参考设置",
-          "生成的图片不添加水印",
+          "按接口选择宽高比与画质参数",
           "无需注册登录",
           "通过历史记录回顾以往作品",
           "一键下载或复制到剪贴板",
         ],
         screenshot: `${appUrl}/opengraph-image`,
-        creator: {
-          "@type": "Organization",
-          name: "v0 by Vercel",
-          url: "https://v0.dev",
-          parentOrganization: {
-            "@type": "Organization",
-            name: "Vercel",
-            url: "https://vercel.com",
-          },
-        },
-        keywords: "AI 图像生成器, AI 图像编辑器, 文字生成图像, Google Gemini 图像生成, 无水印 AI 图像, 多模型图像生成, AI 艺术创作, 图像实验室",
-        aggregateRating: {
-          "@type": "AggregateRating",
-          ratingValue: "4.5",
-          ratingCount: "150",
-          bestRating: "5",
-          worstRating: "1",
-        },
+        keywords: "AI 图像生成器, AI 图像编辑器, 文字生成图像, 自定义 API, 中转 API 配置, 多模型图像生成, 图像实验室",
       },
       {
         "@type": "FAQPage",
@@ -158,7 +127,7 @@ function JsonLd() {
             name: "图像生成实验室可以做什么？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "图像生成实验室支持多种 AI 图像模型，无需登录即可进行文字生成图像和参考图片编辑，生成的图片不添加水印。可根据模型调整画质、宽高比等参数。",
+              text: "配置自己的中转 API 后，可使用兼容的模型进行文字生成图像和参考图片编辑。模型列表、图片能力和可用参数取决于中转及所选模型。",
             },
           },
           {
@@ -166,7 +135,7 @@ function JsonLd() {
             name: "什么是图像生成实验室？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "图像生成实验室是基于网页的 AI 图像生成与编辑工具，通过 Vercel AI Gateway 接入多个模型。输入文字描述即可生成图像，也可以上传图片进行编辑，支持各模型提供的宽高比与专属设置。",
+              text: "图像生成实验室是基于网页的 AI 图像生成与编辑工具，可在 API 设置中更换 Base URL 和 Token、读取模型列表或填写 ID，再将自定义名称映射到实际模型。生成界面只显示自定义名称，支持 Images 与 Chat Completions 兼容生图接口。",
             },
           },
           {
@@ -174,23 +143,23 @@ function JsonLd() {
             name: "图像生成实验室如何计费？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "本应用无需用户登录，模型调用通过部署者配置的 Vercel AI Gateway 账户计费，具体费用取决于所选模型和参数。",
+              text: "模型调用使用 API 设置中填写的 Token，费用由对应中转账户承担，具体计费以中转服务为准。取消本页等待不保证上游任务停止或免除费用。",
             },
           },
           {
             "@type": "Question",
-            name: "图像生成实验室与 DALL-E、Midjourney 有什么区别？",
+            name: "图像生成实验室可以接入哪些模型？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "本实验室在统一界面中提供 OpenAI、Google、xAI、FLUX、Recraft 和 Seedream 等模型，方便切换和比较。支持图像生成与编辑，可用参数、费用和速度取决于所选模型。",
+              text: "模型由所配置的中转服务提供，可在 API 设置中读取列表或填写 ID，并为模型设置自定义显示名称。请选用支持生图且兼容 Images 或 Chat Completions 接口的模型；模型列表中也可能包含仅支持文字的模型。",
             },
           },
           {
             "@type": "Question",
-            name: "不同模型有哪些专属设置？",
+            name: "可以调整哪些图片参数？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "GPT Image 支持自动、低、中、高画质。Gemini 3.1 Flash 支持思考深度、最高 4K 分辨率和 Google 搜索参考。宽高比选项随模型变化。",
+              text: "Images 接口提供固定尺寸与自动、低、中、高画质选项，需中转和模型支持。Chat Completions 接口将期望宽高比写入提示词，实际输出由中转和模型决定。",
             },
           },
           {
@@ -198,7 +167,7 @@ function JsonLd() {
             name: "可以使用图像生成实验室编辑已有图片吗？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "可以。最多上传两张参考图片，并用自然语言描述修改需求。AI 会根据提示词编辑、变换或组合图片，可用于更换背景、风格转换、移除物体等场景。",
+              text: "所选中转和模型支持图片编辑时，可以上传最多两张参考图片，并用自然语言描述修改需求。提交的单张图片不超过 10 MB，实际效果取决于模型。",
             },
           },
           {
@@ -206,7 +175,7 @@ function JsonLd() {
             name: "图像生成实验室支持哪些宽高比？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "可选比例由当前模型决定，包括 1:1（正方形）、16:9（横向宽屏）、9:16（竖向）、4:3、3:4 等。切换模型时会自动选择最接近的可用比例。",
+              text: "Images 接口提供 1:1、3:2 和 2:3 固定尺寸。Chat Completions 接口可在提示词中表达期望比例，实际尺寸以中转和模型返回结果为准。",
             },
           },
           {
@@ -214,7 +183,7 @@ function JsonLd() {
             name: "使用图像生成实验室需要安装软件吗？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: `无需安装。图像生成实验室完全基于网页，可在现代浏览器中运行。访问 ${appUrl} 即可开始生成图像。`,
+              text: "已启动或部署的应用可在现代浏览器中使用，无需安装客户端。首次生成前需在 API 设置中填写中转地址与 Token；生成期间请保持页面打开。",
             },
           },
         ],

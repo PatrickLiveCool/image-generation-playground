@@ -16,6 +16,10 @@ export type GenerationPhase = "sending" | "generating" | "processing" | "loading
 
 export interface Generation {
   id: string
+  creationId?: string
+  version?: number
+  parentVersionId?: string | null
+  modelLabel?: string
   status: "loading" | "complete" | "error"
   progress: number
   phase?: GenerationPhase
@@ -30,8 +34,6 @@ export interface Generation {
   useGrounding?: boolean
   aspectRatio?: string
   mode?: string
-  workflowRunId?: string
-  sdkRunId?: string
 }
 
 export type AspectRatioOption = {

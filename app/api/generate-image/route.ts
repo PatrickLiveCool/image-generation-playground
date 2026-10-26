@@ -1,189 +1,108 @@
-import { type NextRequest, NextResponse } from "next/server"
-import { start } from "workflow/api"
-import { generateImageWorkflow, type GenerateImageInput } from "@/workflows/generate-image"
-import { DEFAULT_MODEL_ID, MODEL_IDS } from "@/components/image-combiner/model-catalog"
-import type { ModelType, ThinkingLevel, Resolution, Quality } from "@/components/image-combiner/types"
+import { NextResponse } from "next/server"
+import { ProviderError, validateProviderSettings } from "@/lib/provider-network"
+import { imageBytes, readImageSource, type ImageBytes } from "@/lib/relay-image"
+import { createCosStore, readOwnedAsset } from "@/lib/cos-assets"
+import { generateAndStore, type CreativeLineage } from "@/lib/stored-generation"
 
-export const maxDuration = 120
+export const maxDuration = 300
 
-const MAX_PROMPT_LENGTH = 5000
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"]
-const FETCH_TIMEOUT_MS = 15_000
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const VERSION_ID = /^[A-Za-z0-9_-]{1,128}$/
+const MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 
-const VALID_MODEL_IDS = new Set<string>(MODEL_IDS)
-const VALID_QUALITIES = new Set<Quality>(["auto", "low", "medium", "high"])
+type Reference = { file: File } | { url: string }
 
-function isAllowedImageUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== "https:") return false
-    return parsed.hostname.endsWith(".public.blob.vercel-storage.com") ||
-      parsed.hostname.endsWith(".googleusercontent.com") ||
-      parsed.hostname === "generativelanguage.googleapis.com"
-  } catch {
-    return false
+function referenceFrom(form: FormData, key: string): Reference | undefined {
+  const file = form.get(key)
+  const source = form.get(`${key}Url`)
+  if (file !== null && !(file instanceof File)) throw new ProviderError("参考图片格式无效。", 400)
+  if (source !== null && typeof source !== "string") throw new ProviderError("参考图片链接格式无效。", 400)
+  if (file instanceof File && file.size) {
+    if (file.size > MAX_REFERENCE_BYTES) throw new ProviderError("单张参考图不能超过 10 MB。", 400)
+    return { file }
   }
+  if (typeof source === "string" && source.trim()) return { url: source.trim() }
+  return undefined
 }
 
-interface ErrorResponse {
-  error: string
-  message?: string
-  details?: string
-  resetTime?: number
+function creativeContext(form: FormData): { lineage?: CreativeLineage; baseImageUrl?: string } {
+  const rawBase = form.get("baseImageUrl")
+  if (form.has("baseImageUrl") && (typeof rawBase !== "string" || !rawBase.trim())) {
+    throw new ProviderError("修改基准图片缺失，请重新选择要修改的版本。", 400)
+  }
+  const baseImageUrl = typeof rawBase === "string" ? rawBase.trim() : undefined
+  const fields = ["creationId", "clientVersionId", "parentVersionId", "version"]
+  // Existing clients may continue sending standalone image requests.
+  if (!fields.some(field => form.has(field))) return { baseImageUrl }
+
+  const creationId = form.get("creationId")
+  const clientVersionId = form.get("clientVersionId")
+  const rawParent = form.get("parentVersionId")
+  const rawVersion = form.get("version")
+  if (typeof creationId !== "string" || !UUID.test(creationId) || typeof clientVersionId !== "string" || !UUID.test(clientVersionId)) {
+    throw new ProviderError("创作或版本标识无效，请刷新后重试。", 400)
+  }
+  if (typeof rawVersion !== "string" || !/^[1-9]\d*$/.test(rawVersion) || !Number.isSafeInteger(Number(rawVersion))) {
+    throw new ProviderError("版本编号无效。", 400)
+  }
+  if (rawParent !== null && typeof rawParent !== "string") throw new ProviderError("基准版本标识无效。", 400)
+  const parentVersionId = typeof rawParent === "string" && rawParent !== "" ? rawParent : null
+  if (parentVersionId && (!VERSION_ID.test(parentVersionId) || parentVersionId === clientVersionId)) {
+    throw new ProviderError("基准版本标识无效。", 400)
+  }
+  if (Boolean(parentVersionId) !== Boolean(baseImageUrl)) {
+    throw new ProviderError("基准版本与图片不一致，请重新选择要修改的版本。", 400)
+  }
+  return { baseImageUrl, lineage: { creationId, clientVersionId, parentVersionId, version: Number(rawVersion) } }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   try {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0] || request.headers.get("x-real-ip") || "anonymous"
-    const userEmail: string | null = null
-
-    const apiKey = process.env.AI_GATEWAY_API_KEY
-    if (!apiKey) {
-      return NextResponse.json<ErrorResponse>(
-        {
-          error: "尚未配置 AI Gateway",
-          details:
-            "缺少 AI_GATEWAY_API_KEY。请检查项目的 Vercel AI Gateway 配置。",
-        },
-        { status: 500 },
-      )
+    const form = await request.formData()
+    const settings = validateProviderSettings({ baseUrl: form.get("baseUrl"), apiKey: form.get("apiKey"), apiMode: form.get("apiMode") })
+    const prompt = form.get("prompt")
+    const model = form.get("selectedModel")
+    const aspectRatio = String(form.get("aspectRatio") || "square")
+    const quality = String(form.get("quality") || "auto")
+    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 5000) throw new ProviderError("请输入提示词，最多 5000 字。", 400)
+    if (typeof model !== "string" || !model.trim() || model.length > 256 || /[\r\n]/.test(model)) throw new ProviderError("请选择模型或填写有效的模型 ID。", 400)
+    if (!["auto", "low", "medium", "high"].includes(quality)) throw new ProviderError("画质参数无效。", 400)
+    if (!["square", "portrait", "landscape", "wide", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5"].includes(aspectRatio)) throw new ProviderError("宽高比参数无效。", 400)
+    const context = creativeContext(form)
+    const reference1 = referenceFrom(form, "image1")
+    const reference2 = referenceFrom(form, "image2")
+    if (context.baseImageUrl && reference2) {
+      throw new ProviderError("继续修改时最多添加一张补充参考图，请使用第一张参考图位置。", 400)
     }
-
-    // Generated images are saved to Vercel Blob. Without a token the workflow
-    // would generate the image (billing the AI Gateway) and then fail on upload,
-    // so we fail fast here with an actionable message instead.
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      return NextResponse.json<ErrorResponse>(
-        {
-          error: "尚未配置 Blob 存储",
-          details:
-            "缺少 BLOB_READ_WRITE_TOKEN。请在项目设置中连接 Vercel Blob 存储，以便保存生成的图片。",
-        },
-        { status: 500 },
-      )
+    const references = [reference1, reference2].filter((reference): reference is Reference => Boolean(reference))
+    if (!context.baseImageUrl && !references.length && form.get("mode") === "image-editing") {
+      throw new ProviderError("编辑模式下至少需要一张参考图。", 400)
     }
-
-    // Parse form data
-    const formData = await request.formData()
-    const mode = formData.get("mode") as string
-    const prompt = formData.get("prompt") as string
-    const aspectRatio = formData.get("aspectRatio") as string
-    const selectedModelRaw = (formData.get("selectedModel") as string) || DEFAULT_MODEL_ID
-    const selectedModel = (VALID_MODEL_IDS.has(selectedModelRaw) ? selectedModelRaw : DEFAULT_MODEL_ID) as ModelType
-    const thinkingLevel = (formData.get("thinkingLevel") as ThinkingLevel) || "minimal"
-    const resolution = (formData.get("resolution") as Resolution) || "1K"
-    const qualityRaw = (formData.get("quality") as string) || "auto"
-    const quality = (VALID_QUALITIES.has(qualityRaw as Quality) ? qualityRaw : "auto") as Quality
-    const useGrounding = formData.get("useGrounding") === "true"
-
-    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return NextResponse.json<ErrorResponse>({ error: "请输入提示词" }, { status: 400 })
+    const store = createCosStore()
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(240_000)])
+    const images: ImageBytes[] = []
+    const loadSource = async (source: string) => {
+      const owned = await readOwnedAsset(source, store)
+      return owned ?? await readImageSource(source, signal)
     }
-    if (prompt.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json<ErrorResponse>(
-        { error: `提示词过长（最多 ${MAX_PROMPT_LENGTH} 个字符）` },
-        { status: 400 },
-      )
+    // The chosen version always occupies the first input position. A bad base
+    // must fail the edit, never silently turn it into a fresh generation.
+    if (context.baseImageUrl) images.push(await loadSource(context.baseImageUrl))
+    for (const reference of references) {
+      const image = "file" in reference
+        ? imageBytes(new Uint8Array(await reference.file.arrayBuffer()))
+        : await loadSource(reference.url)
+      if (image.bytes.length > MAX_REFERENCE_BYTES) throw new ProviderError("单张参考图不能超过 10 MB。", 400)
+      images.push(image)
     }
-
-    // Convert images to data URLs for serialization into the workflow
-    let image1DataUrl: string | undefined
-    let image2DataUrl: string | undefined
-
-    if (mode === "image-editing") {
-      const image1 = formData.get("image1") as File
-      const image2 = formData.get("image2") as File
-      const image1Url = formData.get("image1Url") as string
-      const image2Url = formData.get("image2Url") as string
-
-      const hasImage1 = image1 || image1Url
-      const hasImage2 = image2 || image2Url
-
-      if (!hasImage1) {
-        return NextResponse.json<ErrorResponse>(
-          { error: "编辑模式下至少需要一张图片" },
-          { status: 400 },
-        )
-      }
-
-      if (image1Url && !isAllowedImageUrl(image1Url)) {
-        return NextResponse.json<ErrorResponse>(
-          { error: "图片链接无效，仅接受允许域名下的 HTTPS 链接。" },
-          { status: 400 },
-        )
-      }
-      if (image2Url && !isAllowedImageUrl(image2Url)) {
-        return NextResponse.json<ErrorResponse>(
-          { error: "图片链接无效，仅接受允许域名下的 HTTPS 链接。" },
-          { status: 400 },
-        )
-      }
-
-      if (image1 && image1.size > MAX_FILE_SIZE) {
-        return NextResponse.json<ErrorResponse>(
-          { error: `第一张图片过大，最大允许 ${MAX_FILE_SIZE / 1024 / 1024} MB。` },
-          { status: 400 },
-        )
-      }
-      if (image2 && image2.size > MAX_FILE_SIZE) {
-        return NextResponse.json<ErrorResponse>(
-          { error: `第二张图片过大，最大允许 ${MAX_FILE_SIZE / 1024 / 1024} MB。` },
-          { status: 400 },
-        )
-      }
-
-      const convertToDataUrl = async (source: File | string): Promise<string> => {
-        if (typeof source === "string") {
-          const response = await fetch(source, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-          const arrayBuffer = await response.arrayBuffer()
-          const buffer = Buffer.from(arrayBuffer)
-          const base64 = buffer.toString("base64")
-          const contentType = response.headers.get("content-type") || "image/jpeg"
-          return `data:${contentType};base64,${base64}`
-        } else {
-          const arrayBuffer = await source.arrayBuffer()
-          const buffer = Buffer.from(arrayBuffer)
-          const base64 = buffer.toString("base64")
-          return `data:${source.type};base64,${base64}`
-        }
-      }
-
-      if (hasImage1) {
-        image1DataUrl = await convertToDataUrl(image1 || image1Url)
-      }
-      if (hasImage2) {
-        image2DataUrl = await convertToDataUrl(image2 || image2Url)
-      }
-    }
-
-    // Start the durable workflow
-    const workflowInput: GenerateImageInput = {
-      mode: mode as "text-to-image" | "image-editing",
-      prompt,
-      aspectRatio,
-      selectedModel,
-      thinkingLevel,
-      resolution,
-      quality,
-      useGrounding,
-      apiKey,
-      userEmail,
-      ip,
-      image1DataUrl,
-      image2DataUrl,
-    }
-
-    const run = await start(generateImageWorkflow, [workflowInput])
-
-    return NextResponse.json({ runId: run.runId })
+    const result = await generateAndStore(settings, {
+      model: model.trim(), prompt, aspectRatio, quality, images,
+      hasBaseImage: Boolean(context.baseImageUrl), lineage: context.lineage,
+    }, store, signal)
+    return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
-    console.error("[generate-image] Error starting workflow:", errorMessage)
-
-    return NextResponse.json<ErrorResponse>(
-      { error: "发生错误，请重试。" },
-      { status: 500 },
-    )
+    // Never log or return upstream response bodies, request headers or credentials.
+    const message = error instanceof ProviderError ? error.message : "生成未完成，请检查中转连接或稍后重试。"
+    return NextResponse.json({ error: message }, { status: error instanceof ProviderError ? error.status : 502 })
   }
 }

@@ -1,0 +1,11 @@
+{
+  "application": "qintopia-image",
+  "version": "0.1.0",
+  "databaseMode": "none",
+  "browserWorkspaceSchema": 1,
+  "assetCapabilityVersion": 1,
+  "rollbackCompatibility": {
+    "mode": "compatible",
+    "reason": "Rollback only to a verified successful release with browser workspace schema 1 and asset capability version 1. Preserve browser records, COS objects and ASSET_ACCESS_SECRET. Legacy timestamps are not semantic releases."
+  }
+}

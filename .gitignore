@@ -12,3 +12,26 @@ node_modules/
 .env*.local
 .DS_Store
 .vercel
+
+# Local generated image files
+.generated-images/
+
+# Private provisioning state and credentials
+.local-ops/
+
+__pycache__/
+
+*.py[cod]
+
+*.tsbuildinfo
+
+# Generated route types and local release/acceptance files
+next-env.d.ts
+.local-workspace/
+.worktrees/
+.release-bundles/
+
+# Keep all local credentials out of source and artifacts
+.env
+.env.*
+!.env.example

@@ -19,12 +19,12 @@ function closestByRatio(targetRatio: number, options: AspectRatioOption[]): Aspe
   return closest
 }
 
-export function useAspectRatio(modelId: string) {
+export function useAspectRatio(modelId: string, apiMode?: "images" | "chat") {
   // Only the aspect ratios the selected model can actually produce.
   const availableAspectRatios = useMemo(() => {
-    const supported = aspectRatiosForModel(modelId)
+    const supported = apiMode === "images" ? ["square", "3:2", "2:3"] : apiMode === "chat" ? ALL_ASPECT_RATIOS.map(r => r.value) : aspectRatiosForModel(modelId)
     return ALL_ASPECT_RATIOS.filter((r) => supported.includes(r.value))
-  }, [modelId])
+  }, [modelId, apiMode])
 
   // Closest supported ratio to a dropped image's dimensions.
   const detectAspectRatio = useCallback(

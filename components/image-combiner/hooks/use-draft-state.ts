@@ -9,7 +9,7 @@ const SAVE_DEBOUNCE_MS = 500
 interface DraftState {
   prompt: string
   aspectRatio: string
-  selectedModel: ModelType
+  selectedMappingId: string
   thinkingLevel: ThinkingLevel
   resolution: Resolution
   useGrounding: boolean
@@ -41,7 +41,7 @@ export function useDraftState(state: DraftState) {
 
   const save = useCallback(() => {
     // Only save if there's something worth saving
-    const hasContent = state.prompt.trim() ||
+    const hasContent = state.selectedMappingId.trim() || state.prompt.trim() ||
       state.image1Url ||
       state.image2Url ||
       state.image1Preview ||

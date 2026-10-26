@@ -1,6 +1,6 @@
 "use client"
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 interface HowItWorksModalProps {
   open: boolean
@@ -13,99 +13,62 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
       <DialogContent className="max-w-2xl bg-black/95 border border-white/10 text-white">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">使用说明</DialogTitle>
+          <DialogDescription className="text-gray-400">使用自己的 API 生成图片，在同一项创作中持续修改并保留版本。</DialogDescription>
         </DialogHeader>
         <div className="space-y-6 text-sm text-gray-300 max-h-[60vh] overflow-y-auto pr-2">
           <div>
-            <p className="leading-relaxed mb-3">
-              本实验室使用{" "}
-              <a
-                href="https://v0.dev"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white hover:text-gray-300 underline"
-              >
-                v0
-              </a>{" "}
-              构建，让你在同一界面使用多家服务商的模型生成图像。所有 API 调用均通过{" "}
-              <a
-                href="https://vercel.com/ai-gateway"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white hover:text-gray-300 underline"
-              >
-                Vercel AI Gateway
-              </a>{" "}
-              提供企业级请求路由与缓存。
-            </p>
-            <p className="leading-relaxed text-white/90">
-              你可以从 v0 克隆本实验室，配置自己的 Vercel AI Gateway 凭据，构建专属应用。
-            </p>
-          </div>
-
-          <div>
-            <h3 className="text-lg font-semibold text-white mb-2">模型</h3>
-            <p className="leading-relaxed mb-2">选择 AI Gateway 提供的图像模型：</p>
+            <h3 className="text-lg font-semibold text-white mb-2">1. 配置你的 API</h3>
             <ul className="list-disc list-inside space-y-2 ml-2">
-              <li>
-                <span className="font-semibold text-white">OpenAI:</span> GPT Image 2 和 GPT Image 1.5
-              </li>
-              <li>
-                <span className="font-semibold text-white">Google:</span> Gemini 3.1 Flash, Gemini 3 Pro, Gemini 2.5 Flash（图像版）
-              </li>
-              <li>
-                <span className="font-semibold text-white">xAI:</span> Grok Imagine
-              </li>
-              <li>
-                <span className="font-semibold text-white">Black Forest Labs:</span> FLUX.2 Max 和 FLUX.2 Pro
-              </li>
-              <li>
-                <span className="font-semibold text-white">Recraft 与字节跳动：</span> Recraft V4.1 Pro, Seedream 4.0–5.0
-              </li>
+              <li>打开页面顶部的“API 设置”，填写中转的 Base URL 和 Token。</li>
+              <li>Base URL 使用完整的 HTTPS API 前缀；若中转地址包含 /v1，请一并填写。</li>
+              <li>按中转说明选择 Images 或 Chat Completions 生图接口，然后保存配置。</li>
+              <li>API 配置和模型映射保存在当前标签页的会话中，刷新后仍可使用；关闭后重新打开时可能需要再次填写。</li>
             </ul>
           </div>
 
           <div>
-            <h3 className="text-lg font-semibold text-white mb-2">各模型专属设置</h3>
+            <h3 className="text-lg font-semibold text-white mb-2">2. 设置模型名称与映射</h3>
             <ul className="list-disc list-inside space-y-2 ml-2">
-              <li>
-                <span className="font-semibold text-white">GPT Image 画质：</span> 自动、低、中或高（计算资源越多，图像保真度越高）
-              </li>
-              <li>
-                <span className="font-semibold text-white">Gemini 3.1 Flash:</span> 思考深度（简要／深入）、最高 4K 分辨率，以及 Google 搜索参考
-              </li>
-              <li>
-                <span className="font-semibold text-white">宽高比：</span> 仅显示当前模型支持的比例；切换模型或拖入图片时，会自动选择最接近的可用比例
-              </li>
+              <li>在 API 设置中读取模型，再添加“显示名称 → 实际模型”的映射；实际模型可从列表选择，也可手动填写 ID。</li>
+              <li>名称由你决定，例如“极致”“均衡”。可新增、删除、调整顺序、改名或更换对应模型，没有固定档位。</li>
+              <li>保存后，生成界面只显示你设置的名称；生成请求使用它对应的实际模型 ID。</li>
+              <li>重新读取模型只更新可选列表，保留已有映射。若对应模型未出现在新列表中，会提示检查，不会自动替换。</li>
+              <li>读取列表成功只表示模型接口可访问；请选用支持生图、且兼容所选接口的模型。</li>
             </ul>
           </div>
 
           <div>
-            <h3 className="text-lg font-semibold text-white mb-2">技术概览</h3>
+            <h3 className="text-lg font-semibold text-white mb-2">3. 创建与持续修改</h3>
+            <p className="leading-relaxed mb-2">新建创作，选择模型名称，输入画面描述和期望比例，点击“生成图片”。首版完成后，当前展示的图片会自动成为下一轮修改的基准。</p>
             <ul className="list-disc list-inside space-y-2 ml-2">
-              <li>
-                <span className="font-semibold text-white">无需登录：</span> 当前版本无需账号，生成历史保存在当前浏览器中
-              </li>
-              <li>
-                <span className="font-semibold text-white">持久化生成任务：</span> 每次请求均由 Vercel Workflow 执行，支持重启后继续运行和恢复
-              </li>
-              <li>
-                <span className="font-semibold text-white">图片处理：</span> 在客户端转换为 Base64，并校验格式与大小
-              </li>
-              <li>
-                <span className="font-semibold text-white">生成结果：</span> 存储于 Vercel Blob，不添加水印
-              </li>
+              <li>继续填写修改要求，点击“修改 V1”等按钮即可生成新版本；按钮中的版本号表示本轮使用的基准图。</li>
+              <li>想从旧版本继续时，在创作历史中选中它，再提交修改要求。已有版本都会保留。</li>
+              <li>首次生成可添加最多两张参考图；修改已有版本时，可再添加一张补充参考图。提交的单张参考图不超过 10 MB。</li>
+              <li>修改会将基准图交给模型，但结果仍由模型生成，不能保证未提及的区域像素完全不变。</li>
+              <li>Images 接口提供 1:1、3:2、2:3 比例；画质选项需中转和模型支持，不确定时保持“自动”。</li>
+              <li>Chat Completions 接口通过提示词表达期望比例，实际输出由中转和模型决定。</li>
             </ul>
           </div>
 
           <div>
-            <h3 className="text-lg font-semibold text-white mb-2">图像编辑</h3>
-            <p className="leading-relaxed mb-2">
-              上传一到两张参考图片，并输入编辑指令：
-            </p>
-            <ul className="list-disc list-inside space-y-1 ml-2">
-              <li>拖放图片，或通过文件选择器上传</li>
-              <li>直接粘贴图片链接</li>
-              <li>支持 PNG、JPG、WebP、GIF（提交至服务器的单张图片不超过 10 MB）</li>
+            <h3 className="text-lg font-semibold text-white mb-2">4. 管理创作与生成进度</h3>
+            <ul className="list-disc list-inside space-y-2 ml-2">
+              <li>在“我的创作”中新建、切换或重命名创作。每项创作独立保存草稿、参考图和版本历史。</li>
+              <li>一项创作生成期间，可以切换到其他创作继续工作；正在生成的创作暂时不能修改输入或切换基准版本。</li>
+              <li>生成期间请保持网页打开。刷新或关闭后，未完成请求不会自动恢复；重新打开后可检查状态并手动重试。</li>
+              <li>失败或取消会保留已有图片和本轮草稿。取消仅停止本页等待，不保证中转停止任务或计费。</li>
+              <li>生成完成后可下载、复制或全屏查看。清空输入只清除本轮草稿和补充参考图，保留已有版本。</li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 className="text-lg font-semibold text-white mb-2">数据保存</h3>
+            <ul className="list-disc list-inside space-y-2 ml-2">
+              <li>创作信息、草稿、参考图文件和历史引用保存在本浏览器的 IndexedDB 中，不含 API Token；更换浏览器、设备或域名不会自动同步。</li>
+              <li>清除浏览器数据会清除本地创作记录，不会删除对象存储中的文件。</li>
+              <li>图片通过受限访问链接展示，请妥善保管链接；分享链接会授予对应图片的访问权限。</li>
+              <li>已提交的参考图、各轮产出和任务清单保存在私有对象存储中，应用服务器不保存图片文件。清单包含原始提示词及版本之间的来源关系，不含 API Token。</li>
+              <li>模型调用使用你填写的 Token，费用和可用能力以中转服务为准。</li>
             </ul>
           </div>
 
@@ -113,7 +76,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
             <h3 className="text-lg font-semibold text-white mb-2">键盘快捷键</h3>
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>
-                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + Enter</kbd> — 生成图像
+                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + Enter</kbd> — 提交当前生成或修改要求
               </li>
               <li>
                 <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + C</kbd> — 将图片复制到剪贴板
@@ -122,7 +85,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
                 <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + D</kbd> — 下载图片
               </li>
               <li>
-                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + U</kbd> — 将生成的图片用作参考图片
+                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">F</kbd> — 全屏查看当前图片（输入框外）
               </li>
               <li>
                 <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">Esc</kbd> — 关闭全屏查看器
