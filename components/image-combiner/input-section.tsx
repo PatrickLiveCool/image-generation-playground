@@ -110,7 +110,7 @@ export const InputSection = memo(function InputSection({
           <Button type="button" onClick={onClearAll} disabled={pending || !hasInput} variant="outline" aria-label="清空输入" title="清空输入和补充参考图，保留已有版本" className="h-7 border-gray-600 bg-transparent px-2 text-xs text-gray-300 hover:bg-gray-700 disabled:opacity-50"><Trash2 className="size-3.5" />清空</Button>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <ModelSelector value={selectedMappingId} onChange={id => { if (!pending) setSelectedMappingId(id) }} mappings={mappings} onOpenApiSettings={onOpenApiSettings} />
+          <ModelSelector value={selectedMappingId} onChange={id => { if (!pending) setSelectedMappingId(id) }} mappings={mappings} />
           <Select disabled={pending} value={aspectRatio} onValueChange={value => { if (!pending) setAspectRatio(value) }}>
             <SelectTrigger aria-label="选择宽高比" className="!h-9 w-[96px] border-gray-600 bg-black/50 px-2 text-xs text-white focus:ring-0 focus-visible:ring-0"><SelectValue placeholder="1:1" /></SelectTrigger>
             <SelectContent className="border-gray-600 bg-black/95 text-white">{availableAspectRatios.map(option => <SelectItem key={option.value} value={option.value} textValue={option.label} className="text-xs"><div className="flex items-center gap-2"><span>{option.icon}</span><span>{option.label}</span></div></SelectItem>)}</SelectContent>

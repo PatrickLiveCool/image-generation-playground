@@ -184,7 +184,7 @@ export function ApiSettingsModal({ open, onOpenChange, settings, models, mapping
               </button>
             </div>
             <p id="provider-token-help" className="text-xs leading-relaxed text-gray-400">
-              配置仅保存在当前标签页的会话中，刷新后仍可使用。关闭后重新打开时可能需要再次填写。
+              配置保存在当前浏览器中，刷新或重新打开页面仍可使用；清除浏览器站点数据后需要重新填写。
             </p>
           </div>
           <div className="space-y-2">

@@ -22,7 +22,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
               <li>打开页面顶部的“API 设置”，填写中转的 Base URL 和 Token。</li>
               <li>Base URL 使用完整的 HTTPS API 前缀；若中转地址包含 /v1，请一并填写。</li>
               <li>按中转说明选择 Images 或 Chat Completions 生图接口，然后保存配置。</li>
-              <li>API 配置和模型映射保存在当前标签页的会话中，刷新后仍可使用；关闭后重新打开时可能需要再次填写。</li>
+              <li>API 配置和模型映射保存在当前浏览器中，刷新或重新打开页面仍可使用；清除浏览器站点数据后需要重新填写。</li>
             </ul>
           </div>
 
@@ -45,8 +45,8 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
               <li>想从旧版本继续时，在创作历史中选中它，再提交修改要求。已有版本都会保留。</li>
               <li>首次生成可添加最多两张参考图；修改已有版本时，可再添加一张补充参考图。提交的单张参考图不超过 10 MB。</li>
               <li>修改会将基准图交给模型，但结果仍由模型生成，不能保证未提及的区域像素完全不变。</li>
-              <li>Images 接口提供 1:1、3:2、2:3 比例；画质选项需中转和模型支持，不确定时保持“自动”。</li>
-              <li>Chat Completions 接口通过提示词表达期望比例，实际输出由中转和模型决定。</li>
+              <li>比例选项按所选模型的能力展示，包含 1:1、9:16、16:9、4:3、3:4、3:2、2:3、5:4、4:5 和 21:9 中可用的选项。</li>
+              <li>Images 接口会将比例转换为尺寸参数，Chat Completions 接口会在提示词中表达期望比例；实际输出仍由中转和模型决定。</li>
             </ul>
           </div>
 

@@ -42,7 +42,7 @@ export default function Home() {
         <section>
           <h2>技术支持</h2>
           <p>
-            图像生成实验室支持 Images 与 Chat Completions 兼容生图接口。API 配置保存在当前标签页会话，
+            图像生成实验室支持 Images 与 Chat Completions 兼容生图接口。API 配置保存在当前浏览器，
             历史记录保存在当前浏览器。参考图、生成结果和任务记录存放在私有对象存储，应用服务器不保存图片文件。
           </p>
         </section>

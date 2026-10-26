@@ -74,7 +74,10 @@ test("text-only success, invalid image data and unsupported aspect ratio fail cl
   assert.throws(() => extractImageSource({ choices: [{ message: { content: "No image available" } }] }), /未返回图片/)
   await assert.rejects(readImageSource("data:image/svg+xml;base64,PHN2Zz4="), /不受支持/)
   assert.throws(() => imageBytes(Buffer.from("not an image")), /图片格式/)
-  await assert.rejects(generateRelayImage(settings, { ...input, aspectRatio: "wide" }, undefined, async () => result()), /请选择/)
+  let sent: any
+  await generateRelayImage(settings, { ...input, aspectRatio: "wide" }, undefined, async (url: string, init: RequestInit) => { sent = { url, init }; return result() })
+  assert.equal(JSON.parse(sent.init.body).size, "2048x864")
+  await assert.rejects(generateRelayImage(settings, { ...input, aspectRatio: "cinema" }, undefined, async () => result()), /宽高比参数无效/)
 })
 
 test("upstream errors never echo response credentials or raw bodies", async () => {
