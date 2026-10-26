@@ -20,9 +20,9 @@ export function GET() {
 
 ## 模型与费用
 
-应用不预设模型档位或绑定具体服务商。模型、权限、画质、速度和费用由所配置的中转及模型决定。Images 接口使用固定尺寸，Chat Completions 的比例通过提示词表达。模型列表包含某个 ID，不代表该模型必然支持生图。
+应用不预设模型档位或绑定具体服务商。模型、权限、画质、速度和费用由所配置的中转及模型决定。比例选项按所选模型的能力展示；Images 接口将比例转换为尺寸参数，Chat Completions 通过提示词表达比例。模型列表包含某个 ID，不代表该模型必然支持生图。
 
-API 配置、Token 和模型映射保存在当前标签页会话中。浏览器存储按来源隔离，切换到新域名后需要重新配置，本地预览的配置与历史记录不会自动迁移。模型调用费用由所填写 Token 对应的中转账户承担。
+API 配置、Token 和模型映射保存在当前浏览器中。浏览器存储按来源隔离，切换到新域名后需要重新配置，本地预览的配置与历史记录不会自动迁移。模型调用费用由所填写 Token 对应的中转账户承担。
 
 ## 图片与数据存储
 
@@ -43,7 +43,7 @@ API 配置、Token 和模型映射保存在当前标签页会话中。浏览器�
 - Next.js App Router，简体中文界面
 - 自定义 Images / Chat Completions 兼容接口
 - 私有腾讯云 COS 与受限图片访问链接
-- 浏览器 IndexedDB 保存创作元数据、草稿、参考图文件和历史引用，sessionStorage 单独保存当前 API 配置、Token 和模型映射
+- 浏览器 IndexedDB 保存创作元数据、草稿、参考图文件和历史引用，localStorage 单独保存当前 API 配置、Token 和模型映射
 `
   return new Response(content, {
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" },

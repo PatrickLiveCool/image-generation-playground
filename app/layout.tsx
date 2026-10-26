@@ -175,7 +175,7 @@ function JsonLd() {
             name: "图像生成实验室支持哪些宽高比？",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "Images 接口提供 1:1、3:2 和 2:3 固定尺寸。Chat Completions 接口可在提示词中表达期望比例，实际尺寸以中转和模型返回结果为准。",
+              text: "比例选项按所选模型的能力展示。Images 接口将比例转换为尺寸参数，Chat Completions 接口可在提示词中表达期望比例，实际尺寸以中转和模型返回结果为准。",
             },
           },
           {

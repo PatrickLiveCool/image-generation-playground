@@ -6,8 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import type { ModelMapping } from "@/lib/api-provider-types"
 import { resolveModelMapping } from "@/lib/model-mappings"
 
-export function ModelSelector({ value, onChange, mappings, onOpenApiSettings }: {
-  value: string; onChange: (id: string) => void; mappings: ModelMapping[]; onOpenApiSettings: () => void
+export function ModelSelector({ value, onChange, mappings }: {
+  value: string; onChange: (id: string) => void; mappings: ModelMapping[]
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -31,7 +31,6 @@ export function ModelSelector({ value, onChange, mappings, onOpenApiSettings }: 
           {!mappings.length && <p className="text-xs text-gray-400 leading-relaxed">还没有模型映射。先在设置里添加显示名称，并选择对应模型。</p>}
           {!!mappings.length && !filtered.length && <p className="text-xs text-gray-400">没有匹配的名称。</p>}
         </div>
-        <button className="text-xs text-gray-300 underline underline-offset-4" onClick={() => { setOpen(false); onOpenApiSettings() }}>管理模型映射</button>
       </PopoverContent>
     </Popover>
   )

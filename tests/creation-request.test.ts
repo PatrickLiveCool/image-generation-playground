@@ -126,7 +126,8 @@ test("invalid connection, mapping, prompt and reference parameters cannot create
   assert.throws(() => build(creation(), { mappings: [{ ...mappings[0], modelId: "bad\nmodel" }] }), /模型 ID/)
   assert.throws(() => build(creation({ prompt: "  " })), /提示词/)
   assert.throws(() => build(creation({ prompt: "a".repeat(5001) })), /5000/)
-  assert.throws(() => build(creation({ aspectRatio: "landscape" })), /1:1、3:2 或 2:3/)
+  const wideRequest = build(creation({ aspectRatio: "landscape" }))
+  assert.equal(wideRequest.formData.get("aspectRatio"), "landscape")
   assert.throws(() => build(creation({ quality: "unknown" as never })), /画质参数/)
 })
 

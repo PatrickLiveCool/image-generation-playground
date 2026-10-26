@@ -108,15 +108,15 @@ export function ImageCombiner(): ReactElement {
     <div className="relative flex h-dvh flex-col overflow-hidden bg-black font-sans text-white">
       <div className="pointer-events-none fixed inset-0 opacity-25"><MemoizedDithering colorBack="#00000000" colorFront="#FFFFFF" speed={0.43} shape="wave" type="4x4" pxSize={3} scale={0.6} style={{ backgroundColor: "#000000", height: "100vh", width: "100vw" }} /></div>
       {toast && <ToastNotification message={toast.message} type={toast.type} />}
-      <main className="relative z-10 mx-auto flex min-h-0 w-full max-w-[1900px] flex-1 flex-col p-3 md:p-5">
-        <header className="mb-4 flex shrink-0 items-center justify-between gap-3">
+      <main className="relative z-10 flex min-h-0 w-full flex-1 flex-col p-2 md:p-4 lg:p-6">
+        <header className="mb-3 flex shrink-0 items-center justify-between gap-3">
           <div><h1 className="text-lg font-semibold md:text-2xl">图像生成实验室</h1><p className="mt-1 text-xs text-gray-400">{api.isConfigured ? "你的 API · 持续创作" : "配置你的 API，开始创作"}</p></div>
           <button type="button" onClick={() => setShowApiSettings(true)} className="flex shrink-0 items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10"><Settings2 className="size-4" />API 设置</button>
         </header>
         {(api.storageError || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.storageError}</div>}
         {workspace.ready && workspace.activeCreation ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded-xl bg-black/90 p-3 lg:flex-row lg:overflow-hidden">
-            <aside className="shrink-0 lg:w-[200px] lg:border-r lg:border-white/10 lg:pr-3"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-white/10 bg-black/75 p-2 lg:flex-row lg:overflow-hidden">
+            <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
             <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
@@ -149,7 +149,7 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
   const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
   const pending = creation.versions.find(version => version.status === "loading")
   const selectedMapping = resolveModelMapping(api.mappings, draft.selectedMappingId)
-  const { availableAspectRatios, closestAvailable } = useAspectRatio(selectedMapping?.modelId || "", api.settings.apiMode)
+  const { availableAspectRatios, closestAvailable } = useAspectRatio(selectedMapping?.modelId || "")
   const patch = useCallback((value: Partial<CreationDraft>) => workspace.patchDraft(creation.id, value), [creation.id, workspace.patchDraft])
   useEffect(() => {
     if (pending || !api.ready) return
@@ -236,8 +236,8 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
   }
 
   return (
-    <div className="grid min-w-0 shrink-0 gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(270px,350px)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
-      <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-5 lg:overflow-y-auto lg:pr-2">
+    <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
+      <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-3 lg:overflow-y-auto lg:pr-2">
         <InputSection mappings={api.mappings} apiMode={api.settings.apiMode} apiConfigured={api.isConfigured} onOpenApiSettings={onOpenSettings}
           prompt={draft.prompt} setPrompt={prompt => patch({ prompt })} aspectRatio={draft.aspectRatio} setAspectRatio={aspectRatio => patch({ aspectRatio })} availableAspectRatios={availableAspectRatios}
           selectedMappingId={draft.selectedMappingId} setSelectedMappingId={selectedMappingId => patch({ selectedMappingId })} quality={draft.quality} setQuality={quality => patch({ quality })}

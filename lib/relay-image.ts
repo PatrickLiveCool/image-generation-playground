@@ -3,8 +3,18 @@ import { ProviderError, publicFetch } from "./provider-network"
 
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 export type ImageBytes = { bytes: Uint8Array; mediaType: string }
-const RATIOS: Record<string, string> = { square: "1:1", portrait: "9:16", landscape: "16:9", wide: "21:9" }
-const SIZES: Record<string, string> = { square: "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536" }
+const RATIOS: Record<string, string> = {
+  square: "1:1", portrait: "9:16", landscape: "16:9", wide: "21:9",
+  "4:3": "4:3", "3:4": "3:4", "3:2": "3:2", "2:3": "2:3", "5:4": "5:4", "4:5": "4:5",
+}
+
+// Keep the Images request aligned with the complete aspect-ratio vocabulary.
+// Providers remain responsible for rejecting sizes their selected model cannot produce.
+const SIZES: Record<string, string> = {
+  square: "1024x1024", portrait: "1024x1792", landscape: "1792x1024", wide: "2048x864",
+  "4:3": "1024x768", "3:4": "768x1024", "3:2": "1536x1024", "2:3": "1024x1536",
+  "5:4": "1280x1024", "4:5": "1024x1280",
+}
 
 export function imageBytes(bytes: Uint8Array): ImageBytes {
   if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new ProviderError("图片为空或超过 20 MB。", 400)
@@ -84,7 +94,7 @@ export async function generateRelayImage(settings: ProviderSettings, input: {
     body = JSON.stringify({ model: input.model, messages: [{ role: "user", content }], modalities: ["image", "text"], stream: false })
   } else {
     const size = SIZES[input.aspectRatio]
-    if (!size) throw new ProviderError("当前图像接口请选择 1:1、3:2 或 2:3。", 400)
+    if (!size) throw new ProviderError("当前宽高比参数无效，请重新选择。", 400)
     const fields = { model: input.model, prompt: input.prompt, n: 1, size, ...(input.quality !== "auto" ? { quality: input.quality } : {}) }
     if (input.images.length) {
       path = "/images/edits"

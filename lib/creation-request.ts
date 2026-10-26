@@ -43,7 +43,6 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   if (mappingError) throw new Error(mappingError)
   const [mapping] = normalizeModelMappings([selectedMapping])
   if (!ASPECT_RATIOS.has(draft.aspectRatio)) throw new Error("宽高比参数无效。")
-  if (provider.apiMode === "images" && !["square", "3:2", "2:3"].includes(draft.aspectRatio)) throw new Error("当前图像接口请选择 1:1、3:2 或 2:3。")
   if (!["auto", "low", "medium", "high"].includes(draft.quality)) throw new Error("画质参数无效。")
   if (typeof draft.useUrls !== "boolean") throw new Error("请选择参考图片的输入方式。")
 
