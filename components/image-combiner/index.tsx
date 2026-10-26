@@ -44,6 +44,7 @@ export function ImageCombiner(): ReactElement {
   const workspace = useCreativeWorkspace()
   const [showApiSettings, setShowApiSettings] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const showToast = useCallback<Toast>((message, type = "success") => {
@@ -52,6 +53,16 @@ export function ImageCombiner(): ReactElement {
     toastTimer.current = setTimeout(() => setToast(null), 5000)
   }, [])
   useEffect(() => () => clearTimeout(toastTimer.current), [])
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/version", { cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<{ version?: unknown }> : null)
+      .then(payload => {
+        if (!cancelled && payload && typeof payload.version === "string" && payload.version.trim()) setAppVersion(payload.version)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const generation = useCreationGeneration(workspace, api.settings, api.mappings, showToast)
   const uploadTokens = useRef(new Map<string, symbol>())
   const [uploads, setUploads] = useState<string[]>([])
@@ -120,7 +131,10 @@ export function ImageCombiner(): ReactElement {
             <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
-        <footer className="shrink-0 pt-3 text-center text-xs text-gray-400"><button type="button" onClick={() => setShowHelp(true)} className="hover:text-white">使用说明</button></footer>
+        <footer className="flex shrink-0 items-center justify-center gap-3 pt-3 text-center text-xs text-gray-400">
+          <button type="button" onClick={() => setShowHelp(true)} className="hover:text-white">使用说明</button>
+          {appVersion && <><span aria-hidden="true" className="text-white/25">·</span><span aria-label={`应用版本 ${appVersion}`}>{appVersion === "development" ? "开发版" : `版本 ${appVersion}`}</span></>}
+        </footer>
       </main>
       <ApiSettingsModal open={showApiSettings} onOpenChange={setShowApiSettings} settings={api.settings} models={api.models} mappings={api.mappings} modelsSynced={api.modelsSynced} onSave={(settings, models, mappings, synced) => {
         api.saveSettings(settings, models, mappings, synced)
