@@ -10,7 +10,7 @@ PR 标题采用 `feat(scope): 说明` 等 Conventional Commit 格式；正文包
 
 2026-10-26 实测 GitHub API 对本个人私有仓库的分支保护返回 403，要求 GitHub Pro 或公开仓库。按用户决定保持当前仓库和私有可见性，不升级套餐或迁移。
 
-`.github/default-branch-protection.json` 记录期望的保护规则，并不表示规则已在 GitHub 生效。因此目前必须由维护者遵守 PR 与检查约定；CI 可运行，但不能声称 GitHub 已强制禁止直接推送或绕过失败检查。以后套餐支持时，再核对并应用该配置。
+`.github/master-protection.json` 记录期望的保护规则，并不表示规则已在 GitHub 生效。因此目前必须由维护者遵守 PR 与检查约定；CI 可运行，但不能声称 GitHub 已强制禁止直接推送或绕过失败检查。以后套餐支持时，再核对并应用该配置。
 
 `production` Environment 已建立，不设置额外 reviewer 或等待时间。生产凭据在该环境加密保存，日常批准点是人工 Publish 正式 Release。工作流仍会验证 tag、源码提交和 `master` 祖先关系。
 
