@@ -94,7 +94,7 @@ test('CLI recognizes only the fixed Release Please branch as an automated releas
     pull_request: {
       title: 'chore(release): release 1.2.4',
       body: `This PR was generated with [Release Please].\n\n${body('Release Please 自动更新版本。', 'Image Playground CI 自动运行。', '只有发布正式 Release 才会部署。')}`,
-      head: { ref: 'release-please--branches--master' },
+      head: { ref: 'release-please--branches--master--components--qintopia-image' },
       user: { login: 'noraincode' },
     },
   }), fs.mkdtempSync(path.join(os.tmpdir(), 'qintopia-image-release-pr-')) + '/event.json');

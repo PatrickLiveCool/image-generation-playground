@@ -1,7 +1,9 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RELEASE_BRANCH = "release-please--branches--master";
+// Manifest mode includes the package component in its PR branch even when
+// include-component-in-tag is false. This matches the actual generated PR.
+const RELEASE_BRANCH = "release-please--branches--master--components--qintopia-image";
 const WORKFLOWS = ["ci.yml", "pr-format.yml"];
 const SHA = /^[0-9a-f]{40}$/;
 
