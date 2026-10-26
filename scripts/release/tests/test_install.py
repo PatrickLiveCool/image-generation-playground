@@ -1,6 +1,7 @@
 """Run the installer preflight in a remapped temporary filesystem with fake system tools."""
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -25,8 +26,10 @@ class InstallTest(unittest.TestCase):
         for name in ['common.py', 'cos.py', 'server.py', 'requirements.txt']:
             (self.source / 'scripts/release' / name).write_text('# reviewed test input\n')
         script = (ROOT / 'deploy/install.sh').read_text()
-        for prefix in ['/opt/', '/etc/', '/home/', '/usr/local/', '/tmp/']:
-            script = script.replace(prefix, str(self.fs) + prefix)
+        # One pass: Linux's temporary root itself contains /tmp/. Repeated
+        # replacements would rewrite the /tmp/ inserted for an earlier /opt/.
+        script = re.sub(r'/(?:opt|etc|home|usr/local|tmp)/',
+                        lambda match: str(self.fs) + match.group(0), script)
         self.installer = self.source / 'deploy/install.sh'
         self.installer.write_text(script)
         (self.fs / 'opt/qintopia-image-runtime/bin').mkdir(parents=True)
