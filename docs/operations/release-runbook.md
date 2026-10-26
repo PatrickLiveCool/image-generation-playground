@@ -67,4 +67,4 @@ Retention 仅手动运行，默认 `dry_run=true`。检查计划后显式选择 
 
 分别查看 PR CI、不可变制品、服务器工具安装、应用 release 状态、公网 health/version 和人工功能验收。Linux CI 的 standalone smoke 使用合成配置，仅在本机请求健康、版本和静态资源，不连接 COS 或模型，也不上传或发布制品。
 
-当前安装与仓库配置结果见 `ops/release-infra/status.json`。早期 `ops/image-app-deploy/` 脚本只作为恢复记录，不能直接重跑覆盖正式工具管理的状态。
+当前安装与仓库配置结果保存在本机忽略目录 `.local-ops/release-infra/status.json`。早期 `ops/image-app-deploy/` 脚本只作为恢复记录，不能直接重跑覆盖正式工具管理的状态。
