@@ -6,16 +6,6 @@ on:
     branches: [master]
   push:
     branches: [master]
-  workflow_dispatch:
-    inputs:
-      pull_request_number:
-        description: Release PR number supplied by Release Please
-        required: true
-        type: string
-      expected_head_sha:
-        description: Current release PR commit supplied by Release Please
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -41,13 +31,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
-      - name: Validate explicitly dispatched release PR
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_PR_NUMBER: ${{ inputs.pull_request_number }}
-          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
-        run: node .github/scripts/release-pr-checks.mjs validate
       - name: Activate pinned pnpm
         run: |
           corepack enable

@@ -138,16 +138,16 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertNotIn("lint", package["scripts"])
         self.assertIn("next typegen", package["scripts"]["typecheck"])
 
-    def test_release_please_prepares_drafts_and_explicitly_dispatches_checks_without_pat(self) -> None:
+    def test_release_please_matches_standard_token_based_flow(self) -> None:
         workflow = self.workflows["release-please"]
         self.assertIn("github.ref == 'refs/heads/master'", workflow)
-        self.assertIn("token: ${{ github.token }}", workflow)
-        self.assertNotIn("secrets.RELEASE_PLEASE_TOKEN", workflow)
-        self.assertIn("actions: write", workflow)
+        self.assertIn("token: ${{ secrets.RELEASE_PLEASE_TOKEN }}", workflow)
+        self.assertNotIn("github.token", workflow)
+        self.assertNotIn("actions: write", workflow)
         self.assertIn("issues: write", workflow)
-        self.assertIn("release-pr-checks.mjs dispatch", workflow)
-        self.assertIn("RELEASE_PRS_JSON: ${{ steps.release.outputs.prs }}", workflow)
-        self.assertIn("RELEASE_PR_JSON: ${{ steps.release.outputs.pr }}", workflow)
+        self.assertNotIn("release-pr-checks.mjs", workflow)
+        self.assertNotIn("RELEASE_PRS_JSON", workflow)
+        self.assertNotIn("RELEASE_PR_JSON", workflow)
         self.assertIn("release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071", workflow)
         self.assertNotIn("environment: production", workflow)
         self.assertNotIn("orchestrate.py", workflow)
@@ -159,15 +159,14 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertEqual(config["bootstrap-sha"], "75b10d69e4ff4bbe7e4b9542df349f0223a44aac")
         self.assertIn({"type": "json", "path": "deploy/release-policy.json", "jsonpath": "$.version"}, package["extra-files"])
 
-    def test_explicit_release_checks_revalidate_the_requested_pr_head(self) -> None:
+    def test_standard_pr_events_run_checks_without_release_dispatch_inputs(self) -> None:
         for name in ("ci", "pr-format"):
             workflow = self.workflows[name]
-            self.assertIn("workflow_dispatch:", workflow)
-            self.assertIn("pull_request_number:", workflow)
-            self.assertIn("expected_head_sha:", workflow)
-            self.assertIn("EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}", workflow)
-            self.assertIn("release-pr-checks.mjs validate", workflow)
-        self.assertIn(".github/scripts/release-pr-checks.test.mjs", json.loads(read("package.json"))["scripts"]["test:pr"])
+            self.assertNotIn("workflow_dispatch:", workflow)
+            self.assertNotIn("pull_request_number:", workflow)
+            self.assertNotIn("expected_head_sha:", workflow)
+            self.assertNotIn("release-pr-checks.mjs", workflow)
+        self.assertNotIn("release-pr-checks.test.mjs", json.loads(read("package.json"))["scripts"]["test:pr"])
 
     def test_releases_are_published_master_reachable_and_frozen(self) -> None:
         workflow = self.workflows["release"]
