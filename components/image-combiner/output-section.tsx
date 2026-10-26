@@ -5,12 +5,12 @@ import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ProgressBar } from "./progress-bar"
-import { useIsMobile } from "@/hooks/use-mobile"
-import { Pin, PinOff } from "lucide-react"
+import { Pin, PinOff, Copy, Download, ImageIcon, RotateCw } from "lucide-react"
 import type { Generation } from "./types"
 
 interface OutputSectionProps {
   selectedGeneration: Generation | undefined
+  pendingGeneration?: Generation
   generations: Generation[]
   selectedGenerationId: string | null
   setSelectedGenerationId: (id: string) => void
@@ -19,288 +19,90 @@ interface OutputSectionProps {
   onCancelGeneration: (id: string) => void
   onDeleteGeneration: (id: string) => void
   onOpenFullscreen: () => void
-  onLoadAsInput: () => void
+  onLoadAsInput?: () => void
   onCopy: () => void
   onDownload: () => void
   onOpenInNewTab: () => void
   onImageReady: (id: string) => void
+  onImageError: (id: string) => void
 }
 
-const ActionButtons = memo(function ActionButtons({
-  disabled,
-  onLoadAsInput,
-  onCopy,
-  onDownload,
-  pinned,
-  onTogglePin,
-}: {
-  disabled: boolean
-  onLoadAsInput: () => void
+const ActionButtons = memo(function ActionButtons({ onCopy, onDownload, pinned, onTogglePin }: {
   onCopy: () => void
   onDownload: () => void
   pinned: boolean
   onTogglePin: () => void
 }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <Button
-        onClick={onLoadAsInput}
-        disabled={disabled}
-        variant="outline"
-        size="sm"
-        className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="用作参考图片"
-      >
-        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-        </svg>
-        <span className="hidden sm:inline">用作参考</span>
-      </Button>
-      <Button
-        onClick={onCopy}
-        disabled={disabled}
-        variant="outline"
-        size="sm"
-        className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="复制到剪贴板"
-      >
-        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" strokeWidth="2" />
-          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" strokeWidth="2" />
-        </svg>
-        <span className="hidden sm:inline">复制</span>
-      </Button>
-      <Button
-        onClick={onDownload}
-        disabled={disabled}
-        variant="outline"
-        size="sm"
-        className="text-xs h-7 px-2 bg-black/70 backdrop-blur-sm border-gray-600 text-white hover:bg-black/90 flex items-center gap-1"
-        title="下载图片"
-      >
-        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-          />
-        </svg>
-        <span className="hidden sm:inline">下载</span>
-      </Button>
-      <Button
-        onClick={onTogglePin}
-        variant="outline"
-        size="sm"
-        className={cn(
-          "hidden md:flex text-xs h-7 px-2 backdrop-blur-sm items-center gap-1",
-          pinned
-            ? "bg-white text-black border-white hover:bg-gray-200"
-            : "bg-black/70 border-gray-600 text-white hover:bg-black/90",
-        )}
-        title={pinned ? "取消固定工具栏" : "固定工具栏"}
-      >
-        {pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
-      </Button>
-    </div>
-  )
+  return <div className="flex items-center gap-1.5">
+    <Button type="button" onClick={onCopy} variant="outline" size="sm" className="h-8 border-gray-600 bg-black/80 px-2 text-xs text-white backdrop-blur-sm hover:bg-black/95" title="复制到剪贴板"><Copy className="size-3.5" /><span>复制</span></Button>
+    <Button type="button" onClick={onDownload} variant="outline" size="sm" className="h-8 border-gray-600 bg-black/80 px-2 text-xs text-white backdrop-blur-sm hover:bg-black/95" title="下载图片"><Download className="size-3.5" /><span>下载</span></Button>
+    <Button type="button" onClick={onTogglePin} variant="outline" size="sm" className={cn("hidden h-8 border-gray-600 px-2 text-xs backdrop-blur-sm md:flex", pinned ? "bg-white text-black hover:bg-gray-200" : "bg-black/80 text-white hover:bg-black/95")} aria-label={pinned ? "取消固定工具栏" : "固定工具栏"}>{pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}</Button>
+  </div>
 })
 
 export const OutputSection = memo(function OutputSection({
-  selectedGeneration,
-  generations,
-  selectedGenerationId,
-  setSelectedGenerationId,
-  imageLoaded,
-  setImageLoaded,
-  onCancelGeneration,
-  onDeleteGeneration,
-  onOpenFullscreen,
-  onLoadAsInput,
-  onCopy,
-  onDownload,
-  onOpenInNewTab,
-  onImageReady,
+  selectedGeneration, pendingGeneration, generations, selectedGenerationId, setSelectedGenerationId,
+  setImageLoaded, onCancelGeneration, onOpenFullscreen, onCopy, onDownload, onImageError,
 }: OutputSectionProps) {
-  const isMobile = useIsMobile()
   const [pinned, setPinned] = useState(false)
-  useEffect(() => {
-    try { setPinned(localStorage.getItem("toolbar_pinned") === "true") } catch {}
-  }, [])
-  const togglePin = useCallback(() => {
-    setPinned((prev) => {
-      const next = !prev
-      try { localStorage.setItem("toolbar_pinned", String(next)) } catch {}
-      return next
-    })
-  }, [])
+  const [loadError, setLoadError] = useState(false)
+  const [reloadNonce, setReloadNonce] = useState(0)
+  const imageUrl = selectedGeneration?.imageUrl ?? null
+  const complete = selectedGeneration?.status === "complete" && Boolean(imageUrl)
+  const pendingParent = generations.find(generation => generation.id === pendingGeneration?.parentVersionId)
+
+  useEffect(() => { try { setPinned(localStorage.getItem("toolbar_pinned") === "true") } catch {} }, [])
+  useEffect(() => { setLoadError(false); setImageLoaded(false) }, [imageUrl, setImageLoaded])
+  const togglePin = useCallback(() => setPinned(current => {
+    const next = !current
+    try { localStorage.setItem("toolbar_pinned", String(next)) } catch {}
+    return next
+  }), [])
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeElement = document.activeElement
-      const isTyping = activeElement?.tagName === "TEXTAREA" || activeElement?.tagName === "INPUT"
-
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !isTyping) {
-        if (generations.length <= 1) return
-
-        e.preventDefault()
-        const currentIndex = generations.findIndex((g) => g.id === selectedGenerationId)
-        if (currentIndex === -1 && generations.length > 0) {
-          setSelectedGenerationId(generations[0].id)
-          return
-        }
-
-        let newIndex
-        if (e.key === "ArrowLeft") {
-          newIndex = currentIndex - 1
-        } else {
-          newIndex = currentIndex + 1
-        }
-
-        if (newIndex >= 0 && newIndex < generations.length) {
-          setSelectedGenerationId(generations[newIndex].id)
-        }
+    if (pendingGeneration) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = document.activeElement
+      if (target instanceof HTMLElement && (target.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(target.tagName))) return
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+      const completeVersions = generations.filter(generation => generation.status === "complete" && generation.imageUrl)
+      if (completeVersions.length < 2) return
+      const index = completeVersions.findIndex(generation => generation.id === selectedGenerationId)
+      const next = index < 0 ? 0 : index + (event.key === "ArrowLeft" ? -1 : 1)
+      if (next >= 0 && next < completeVersions.length) {
+        event.preventDefault()
+        setSelectedGenerationId(completeVersions[next].id)
       }
     }
-
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [generations, selectedGenerationId, setSelectedGenerationId])
+  }, [generations, selectedGenerationId, setSelectedGenerationId, pendingGeneration])
 
-  // Show image when URL exists (even during loading — renders behind progress bar)
-  const imageUrl = selectedGeneration?.imageUrl || null
-  const isComplete = selectedGeneration?.status === "complete"
-  const isLoading = selectedGeneration?.status === "loading"
-
-  const handleImageLoad = useCallback(() => {
-    setImageLoaded(true)
-    // If still "loading", the image just finished decoding behind the progress bar.
-    // Signal completion — progress bar disappears, image is already painted = 0ms gap.
-    if (selectedGeneration?.status === "loading" && selectedGeneration.id) {
-      onImageReady(selectedGeneration.id)
-    }
-  }, [setImageLoaded, selectedGeneration?.status, selectedGeneration?.id, onImageReady])
-
-  const handleCancel = useCallback(() => {
-    if (selectedGeneration) {
-      onCancelGeneration(selectedGeneration.id)
-    }
-  }, [selectedGeneration, onCancelGeneration])
-
-  const hasImage = isComplete && !!imageUrl && generations.length > 0
+  const imageLoadFailed = () => {
+    setLoadError(true)
+    if (selectedGeneration) onImageError(selectedGeneration.id)
+  }
+  const reloadImage = () => { setLoadError(false); setReloadNonce(value => value + 1) }
 
   return (
-    <div className="flex flex-col h-full min-h-0 select-none relative group/output">
-      <div className="relative flex-1 min-h-0 flex flex-col">
-        {/* Image layer — rendered whenever URL exists, even during "loading".
-            Sits underneath the progress bar so it's decoded and painted
-            BEFORE the progress bar is removed. */}
-        {imageUrl && (
-          <div className="absolute inset-0 flex flex-col select-none">
-            <div className="flex-1 flex items-center justify-center relative max-w-full max-h-full overflow-hidden">
-              {imageUrl.startsWith("data:") ? (
-                <img
-                  src={imageUrl}
-                  alt={`生成的图片：${selectedGeneration?.prompt || ""}`}
-                  fetchPriority="high"
-                  className={cn(
-                    "max-w-full max-h-full cursor-pointer",
-                    "lg:w-full lg:h-full lg:object-contain",
-                  )}
-                  onLoad={handleImageLoad}
-                  onClick={isComplete ? onOpenFullscreen : undefined}
-                />
-              ) : (
-                <Image
-                  src={imageUrl}
-                  alt={`生成的图片：${selectedGeneration?.prompt || ""}`}
-                  fill
-                  priority
-                  sizes="(max-width: 768px) 100vw, (max-width: 1280px) 55vw, 45vw"
-                  className="object-contain cursor-pointer"
-                  onLoad={handleImageLoad}
-                  onClick={isComplete ? onOpenFullscreen : undefined}
-                />
-              )}
-
-              {/* Action buttons — only when complete */}
-              {hasImage && (
-                <div
-                  className={cn(
-                    "absolute bottom-3 left-1/2 -translate-x-1/2 transition-all duration-200 z-10",
-                    "md:opacity-0 md:translate-y-2",
-                    pinned
-                      ? "md:opacity-100 md:translate-y-0"
-                      : "md:group-hover/output:opacity-100 md:group-hover/output:translate-y-0",
-                  )}
-                >
-                  <ActionButtons
-                    disabled={!isComplete}
-                    onLoadAsInput={onLoadAsInput}
-                    onCopy={onCopy}
-                    onDownload={onDownload}
-                    pinned={pinned}
-                    onTogglePin={togglePin}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Progress bar overlay — on top of the image during loading */}
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-20">
-            <ProgressBar
-              progress={selectedGeneration.progress}
-              phase={selectedGeneration.phase || "sending"}
-              onCancel={handleCancel}
-            />
-          </div>
-        )}
-
-        {/* Empty state — no generation selected */}
-        {!selectedGeneration && (
-          <div className="absolute inset-0 flex items-center justify-center text-center py-6 select-none bg-black/20">
-            <div>
-              <div className="w-8 h-8 md:w-16 md:h-16 mx-auto mb-3 border border-gray-600 flex items-center justify-center bg-black/50">
-                <svg
-                  className="w-4 h-4 md:w-8 md:h-8 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <polyline points="21,15 16,10 5,21" />
-                </svg>
-              </div>
-              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">准备就绪，等待生成</p>
-            </div>
-          </div>
-        )}
-
-        {/* Also show empty state for complete generations with no image (shouldn't happen but safe) */}
-        {selectedGeneration && !imageUrl && !isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center text-center py-6 select-none bg-black/20">
-            <div>
-              <div className="w-8 h-8 md:w-16 md:h-16 mx-auto mb-3 border border-gray-600 flex items-center justify-center bg-black/50">
-                <svg
-                  className="w-4 h-4 md:w-8 md:h-8 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <polyline points="21,15 16,10 5,21" />
-                </svg>
-              </div>
-              <p className="text-xs text-gray-400 font-medium py-1 md:py-2">准备就绪，等待生成</p>
-            </div>
-          </div>
-        )}
+    <div className="group/output relative flex h-full min-h-0 select-none flex-col gap-3">
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <p className="text-sm font-medium text-gray-300">{complete ? `当前图片 · V${selectedGeneration?.version ?? 1}` : "图片预览"}</p>
+        {complete && !pendingGeneration && <p className="text-[11px] text-gray-500">下一轮将修改这张图</p>}
       </div>
+      <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-md border border-white/10 bg-black/20">
+        {imageUrl ? (
+          <>
+            {imageUrl.startsWith("data:") ? <img key={`${selectedGeneration?.id}-${reloadNonce}`} src={imageUrl} alt={`V${selectedGeneration?.version ?? 1}：${selectedGeneration?.prompt ?? "生成结果"}`} className="absolute inset-0 h-full w-full cursor-pointer object-contain" onLoad={() => { setImageLoaded(true); setLoadError(false) }} onError={imageLoadFailed} onClick={complete ? onOpenFullscreen : undefined} /> : <Image key={`${selectedGeneration?.id}-${reloadNonce}`} unoptimized src={imageUrl} alt={`V${selectedGeneration?.version ?? 1}：${selectedGeneration?.prompt ?? "生成结果"}`} fill priority sizes="(max-width: 1024px) 100vw, 55vw" className="cursor-pointer object-contain" onLoad={() => { setImageLoaded(true); setLoadError(false) }} onError={imageLoadFailed} onClick={complete ? onOpenFullscreen : undefined} />}
+            {complete && !loadError && <div className={cn("absolute bottom-3 left-1/2 z-10 -translate-x-1/2 transition-all md:translate-y-2 md:opacity-0", pinned ? "md:translate-y-0 md:opacity-100" : "md:group-hover/output:translate-y-0 md:group-hover/output:opacity-100 md:focus-within:translate-y-0 md:focus-within:opacity-100")}><ActionButtons onCopy={onCopy} onDownload={onDownload} pinned={pinned} onTogglePin={togglePin} /></div>}
+            {loadError && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-5 text-center"><ImageIcon className="size-8 text-gray-500" /><p className="text-sm text-gray-300">图片暂时无法加载，版本已保留。</p><Button type="button" variant="outline" onClick={reloadImage} className="border-white/20 bg-transparent text-white hover:bg-white/10 hover:text-white"><RotateCw className="size-3.5" />重新加载图片</Button></div>}
+          </>
+        ) : <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center"><ImageIcon className="size-10 text-gray-600" /><p className="text-sm text-gray-400">{pendingGeneration ? "正在生成首版图片" : "描述你的画面，开始这项创作"}</p></div>}
+      </div>
+      {pendingGeneration && <div className="shrink-0 rounded-md border border-white/15 bg-black/70 p-3">
+        <p role="status" className="mb-2 text-center text-xs text-gray-300">{pendingParent?.version ? `正在基于 V${pendingParent.version} 修改` : "正在生成图片"}</p>
+        <div className="h-24"><ProgressBar key={pendingGeneration.id} progress={pendingGeneration.progress} phase={pendingGeneration.phase || "sending"} onCancel={() => onCancelGeneration(pendingGeneration.id)} /></div>
+      </div>}
     </div>
   )
 })

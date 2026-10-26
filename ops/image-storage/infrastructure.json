@@ -1,0 +1,44 @@
+{
+  "status": "deployed_and_verified",
+  "domain": "image.qintopia.cn",
+  "bucket": "qintopia-image-1305166808",
+  "region": "ap-shanghai",
+  "app_identity": {
+    "name": "qintopia-image-app",
+    "uin": 100054208551,
+    "policy_id": 291255997
+  },
+  "certificate_identity": {
+    "name": "qintopia-image-cert",
+    "uin": 100054208688,
+    "policy_id": 291256248,
+    "status": "retired_key_revoked"
+  },
+  "dns_record_id": 2436857080,
+  "certificate_expires_at": "2027-01-23T23:28:13+08:00",
+  "verification": {
+    "verifiedAt": "2026-10-25T15:37:49.358Z",
+    "runId": "10e7e66a-5a23-46af-a92c-395b182dcceb",
+    "generatorCalls": 1,
+    "realModelRequests": 0,
+    "cosReferenceAndResultHashesMatch": true,
+    "manifestComplete": true,
+    "cdnStatus": 200,
+    "cdnCors": "*",
+    "invalidCapabilityStatus": 403,
+    "cdnManifestStatus": 403
+  },
+  "checked_at": "2026-10-26T00:40:33.454833+08:00",
+  "domain_role": "application",
+  "dns_record_type": "A",
+  "application_service": "qintopia-image-app.service",
+  "certificate_provider": "Certbot / Let's Encrypt",
+  "former_cdn": {
+    "cname": "image.qintopia.cn.cdn.dnsv1.com",
+    "certificate_id": "br4TJiPv",
+    "status": "offline"
+  },
+  "current_operations": "ops/image-app-deploy/README.md",
+  "renewal_timer": "certbot.timer",
+  "deployment_record": "ops/image-app-deploy/deployment.json"
+}

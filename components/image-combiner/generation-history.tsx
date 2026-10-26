@@ -108,7 +108,7 @@ const GenerationThumbnail = memo(function GenerationThumbnail({
             quality={85}
             priority={eager}
             loading={eager ? "eager" : "lazy"}
-            unoptimized={gen.imageUrl?.startsWith("data:") || gen.imageUrl?.startsWith("blob:")}
+            unoptimized
             className={cn("absolute inset-0 w-full h-full object-cover", imageLoaded ? "opacity-100" : "opacity-0")}
             onLoad={() => {
               setImageLoaded(true)

@@ -1,7 +1,7 @@
 import type { Generation } from "@/components/image-combiner/types"
 
-// Local, browser-only generation history. Images themselves live in Vercel
-// Blob; this just keeps the list of recent generations (URLs + metadata) in
+// Local, browser-only history. Images live in private COS; stable capability
+// URLs resolve to short-lived signed CDN URLs. This keeps references and metadata in
 // localStorage so the gallery survives reloads without any database.
 const HISTORY_KEY = "img_gen_history"
 const MAX_GENERATIONS = 50

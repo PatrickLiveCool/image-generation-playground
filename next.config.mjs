@@ -1,14 +1,15 @@
-import pkg from "workflow/next"
-const { withWorkflow } = pkg
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
 
   cacheComponents: true,
   typescript: {
     ignoreBuildErrors: true,
   },
+  // Capability-bearing image requests must not enter request logs or disk caches.
+  logging: { incomingRequests: false },
   images: {
+    unoptimized: true,
     qualities: [75, 85],
     remotePatterns: [
       {
@@ -34,6 +35,7 @@ const nextConfig = {
     ],
   },
   experimental: {
+    cpus: 1,
     optimizePackageImports: [
       'lucide-react',
       '@radix-ui/react-icons',
@@ -52,4 +54,4 @@ const nextConfig = {
   },
 }
 
-export default withWorkflow(nextConfig)
+export default nextConfig

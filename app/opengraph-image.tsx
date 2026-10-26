@@ -2,7 +2,6 @@ import { ImageResponse } from "next/og"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
-export const runtime = "nodejs"
 
 export const alt = "图像生成实验室 - 多模型 AI 图像生成"
 export const size = { width: 1200, height: 630 }

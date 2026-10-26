@@ -90,7 +90,7 @@ export function ProgressBar({ progress, onCancel }: ProgressBarProps) {
         </div>
 
         <p className="text-[10px] md:text-xs text-white/50 text-center mb-3 tabular-nums">
-          {Math.round(progress)}%
+          等待结果 · {elapsed} 秒
         </p>
 
         {statusMessage && (

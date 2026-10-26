@@ -1,0 +1,36 @@
+import type { Generation, Quality } from "@/components/image-combiner/types"
+
+export interface CreationDraft {
+  prompt: string
+  selectedMappingId: string
+  aspectRatio: string
+  quality: Quality
+  useUrls: boolean
+  image1: File | null
+  image2: File | null
+  image1Url: string
+  image2Url: string
+}
+
+export type Draft = CreationDraft
+
+export interface Creation {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  selectedVersionId: string | null
+  draft: CreationDraft
+  versions: Generation[]
+  unread: boolean
+  draftRevision: number
+  pendingDraftRevision: number | null
+}
+
+export interface CreativeWorkspace {
+  schema: 1
+  revision: number
+  lastWriteId?: string
+  activeCreationId: string | null
+  creations: Creation[]
+}

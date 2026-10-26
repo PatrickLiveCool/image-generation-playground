@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly image-domain SSL renewal and CDN certificate verification
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=60
+Persistent=true
+Unit=qintopia-image-cert.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+{
+  "status": "retired_after_application_domain_cutover",
+  "name": "qintopia-image-cert",
+  "domain": "image.qintopia.cn",
+  "expected_cname": "image.qintopia.cn.cdn.dnsv1.com",
+  "cname_verified": true,
+  "uin": 100054208688,
+  "policy_id": 291256248,
+  "server": "122.51.77.220",
+  "credentials_path": "/etc/qintopia-image-cert/credentials.json",
+  "probe_path": "/image-playground/health/certificate-check.txt",
+  "certificate_id": "br4TJiPv",
+  "cdn_cname": "image.qintopia.cn.cdn.dnsv1.com",
+  "script_sha256": "ef8a25e98ac847b7d8581a386783af6b011f1b80b2afb72788f8e18d01fde616",
+  "first_check_result": "healthy_no_change",
+  "certificate_expires_at": "2027-01-23T21:59:59+08:00",
+  "server_instance_id": "lhins-iztqd1tw",
+  "timer_enabled": false,
+  "credential_revoked": true,
+  "replacement": "certbot.timer with image.qintopia.cn webroot lineage",
+  "retired_at": "2026-10-26T00:40:33.454833+08:00"
+}

@@ -12,3 +12,15 @@ node_modules/
 .env*.local
 .DS_Store
 .vercel
+
+# Local generated image files
+.generated-images/
+
+# Private provisioning state and credentials
+.local-ops/
+
+__pycache__/
+
+*.py[cod]
+
+*.tsbuildinfo
