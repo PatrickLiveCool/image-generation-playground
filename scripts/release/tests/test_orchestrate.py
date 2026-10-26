@@ -1,15 +1,19 @@
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ARCHIVE, ReleaseError, json_bytes, release_prefix
 from cos import MARKER
 from orchestrate import (apply_retention, deliver, maintenance, read_release, resolve_rollback,
-                         retention_plan, success_marker, validate_receipt)
+                         retention_plan, success_marker, validate_receipt, SSHSession, quoted_ssh_config_path)
 from test_package import REV, fixture_bundle
 from test_cos import FakeSDK, add_bundle, fake_store
 
@@ -54,6 +58,47 @@ class FakeSession:
 
 
 class OrchestrateTests(unittest.TestCase):
+    def test_ssh_uses_one_config_quoted_known_hosts_path_without_relaxing_trust(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'Codex project with "quotes" and \\ slash'
+            directory.mkdir()
+            key = directory / "deploy key"
+            hosts = directory / "known hosts"
+            key.write_text("test key")
+            hosts.write_text("test known host")
+            arguments = []
+            def factory(argv, **kwargs):
+                arguments.append((argv, kwargs))
+                return object()
+            environment = {"DEPLOY_HOST": "example.invalid", "DEPLOY_USER": "image-deploy",
+                           "DEPLOY_SSH_KEY_FILE": str(key), "DEPLOY_KNOWN_HOSTS_FILE": str(hosts)}
+            with patch.dict(os.environ, environment):
+                SSHSession("status", process_factory=factory)
+            argv, options = arguments[0]
+            self.assertIn("StrictHostKeyChecking=yes", argv)
+            self.assertIn("IdentitiesOnly=yes", argv)
+            self.assertIs(options["shell"], False)
+            self.assertEqual(argv[argv.index("-i") + 1], str(key))
+            self.assertIn("UserKnownHostsFile=" + quoted_ssh_config_path(str(hosts)), argv)
+
+    @unittest.skipUnless(shutil.which("ssh"), "OpenSSH parser is not installed")
+    def test_real_openssh_parser_preserves_spaces_quotes_and_backslashes(self):
+        # -G emits configuration and exits; -F /dev/null avoids user config and
+        # Match exec hooks. This regression neither opens a socket nor uses a key.
+        for path in ('/tmp/Codex project/known_hosts', '/tmp/a"b/known_hosts', '/tmp/a\\b/known hosts', '/tmp/project\'s "quoted" \\ path/known_hosts'):
+            with self.subTest(path=path):
+                result = subprocess.run(["ssh", "-F", "/dev/null", "-G", "-T", "-o", "StrictHostKeyChecking=yes", "-o",
+                                         "UserKnownHostsFile=" + quoted_ssh_config_path(path), "example.invalid"],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("userknownhostsfile " + path, result.stdout.splitlines())
+                self.assertIn("stricthostkeychecking true", result.stdout.splitlines())
+
+    def test_ssh_config_paths_reject_control_characters_before_process_creation(self):
+        for path in ("/tmp/a\nb", "/tmp/a\rb", "/tmp/a\x00b"):
+            with self.subTest(path=path), self.assertRaisesRegex(ReleaseError, "file path"):
+                quoted_ssh_config_path(path)
+
     def test_delivery_verifies_server_and_public_before_success_marker_and_ack(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory, manifest, anchor = fixture_bundle(temporary)

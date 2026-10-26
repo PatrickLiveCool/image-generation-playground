@@ -110,12 +110,20 @@ def verify_public(manifest):
         raise ReleaseError("public verification failed; inspect status before retrying delivery") from None
 
 
+def quoted_ssh_config_path(value):
+    """Quote one filename for OpenSSH's -o parser, not for a shell."""
+    require(isinstance(value, str) and value and not any(character in value for character in ("\n", "\r", "\x00")), "invalid deployment SSH file path")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class SSHSession:
     def __init__(self, operation, arguments=(), *, process_factory=None):
         require(operation in {"deploy", "rollback", "status", "maintenance"}, "invalid remote operation")
         host, user = os.environ.get("DEPLOY_HOST", ""), os.environ.get("DEPLOY_USER", "")
         key_file, hosts_file = os.environ.get("DEPLOY_SSH_KEY_FILE", ""), os.environ.get("DEPLOY_KNOWN_HOSTS_FILE", "")
         require(re.fullmatch(r"[A-Za-z0-9.-]+", host) and re.fullmatch(r"[A-Za-z0-9_-]+", user), "invalid deployment SSH identity")
+        quoted_ssh_config_path(key_file)
+        hosts_option = "UserKnownHostsFile=" + quoted_ssh_config_path(hosts_file)
         require(Path(key_file).is_file() and Path(hosts_file).is_file(), "deployment SSH key and pinned known_hosts are required")
         if operation in {"deploy", "rollback"}:
             require(len(arguments) == 4, "release operation requires four identity arguments")
@@ -128,7 +136,7 @@ class SSHSession:
             require(not arguments, "status takes no parameters")
         argv = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "RequestTTY=no", "-o", "StrictHostKeyChecking=yes",
                 "-o", "IdentitiesOnly=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15",
-                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "UserKnownHostsFile=" + hosts_file,
+                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", hosts_option,
                 "-i", key_file, user + "@" + host, operation, *arguments]
         factory = process_factory or subprocess.Popen
         self.process = factory(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)

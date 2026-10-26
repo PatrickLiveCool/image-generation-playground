@@ -49,10 +49,19 @@ def smoke(source_root):
                     return response.status, response.read()
             except urllib.error.HTTPError as error:
                 return error.code, error.read()
+        def failure(message):
+            logs.flush()
+            logs.seek(0)
+            diagnostic = logs.read()[-4000:]
+            for name, value in environment.items():
+                if any(part in name for part in ("SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "KEY")) and len(value) >= 8:
+                    diagnostic = diagnostic.replace(value, "[redacted]")
+            return ReleaseError(message + "\n" + diagnostic)
         try:
             deadline = time.monotonic() + 40
             while time.monotonic() < deadline:
-                require(process.poll() is None, "standalone exited before becoming healthy")
+                if process.poll() is not None:
+                    raise failure("standalone exited before becoming healthy")
                 try:
                     status, body = request("/api/health")
                     if status == 200:
@@ -61,7 +70,7 @@ def smoke(source_root):
                     pass
                 time.sleep(0.2)
             else:
-                raise ReleaseError("standalone did not become healthy")
+                raise failure("standalone did not become healthy")
             health = json.loads(body)
             require(health.get("status") == "ready" and health.get("revision") == revision, "standalone readiness identity mismatch")
             status, body = request("/api/version")
