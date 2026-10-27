@@ -81,7 +81,7 @@ class CosTests(unittest.TestCase):
             result = upload_bundle(fake_store(sdk, "upload"), directory)
             self.assertEqual(result["manifestSha256"], anchor)
             self.assertEqual(len(sdk.puts), 4)
-            self.assertEqual(sdk.content_lengths, [(directory / name).stat().st_size for name in FILES])
+            self.assertEqual(sdk.content_lengths, [str((directory / name).stat().st_size) for name in FILES])
             self.assertTrue(all(acl == "private" and metadata["x-cos-forbid-overwrite"] == "true" for _, acl, metadata in sdk.puts))
             upload_bundle(fake_store(sdk, "upload"), directory)
             self.assertEqual(len(sdk.puts), 4)
