@@ -8,6 +8,14 @@ from pathlib import Path
 
 PREFIX = "qintopia-image/releases/"
 FILES = ("app.tar.gz", "manifest.json", "SHA256SUMS", "sbom.spdx.json", "deployed.json")
+MULTIPART_ACTIONS = (
+    "name/cos:InitiateMultipartUpload",
+    "name/cos:ListMultipartUploads",
+    "name/cos:ListParts",
+    "name/cos:UploadPart",
+    "name/cos:CompleteMultipartUpload",
+    "name/cos:AbortMultipartUpload",
+)
 
 
 def policies(bucket: str, region: str) -> dict:
@@ -26,7 +34,8 @@ def policies(bucket: str, region: str) -> dict:
         statements.append({"effect": "allow", "action": ["name/cos:GetBucket"], "resource": [bucket_resource],
                            "condition": {"string_like": {"cos:prefix": ["qintopia-image%2Freleases%2F*"]}}})
         if role == "upload":
-            statements.append({"effect": "allow", "action": ["name/cos:PutObject"], "resource": [objects + "/" + name for name in FILES]})
+            statements.append({"effect": "allow", "action": ["name/cos:PutObject", *MULTIPART_ACTIONS],
+                               "resource": [objects + "/" + name for name in FILES]})
         elif role == "retention":
             statements.append({"effect": "allow", "action": ["name/cos:DeleteObject"], "resource": [objects + "/" + name for name in FILES]})
         result[role] = {"version": "2.0", "statement": statements}
