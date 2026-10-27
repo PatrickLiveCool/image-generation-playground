@@ -20,6 +20,8 @@ from common import (APPLICATION, ARCHIVE, FILES, ROOT_PREFIX, SHA256, ReleaseErr
 MARKER = "deployed.json"
 OBJECTS = set(FILES) | {MARKER}
 KEY = re.compile(r"qintopia-image/releases/(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))/([0-9a-f]{40})/([^/]+)\Z")
+UPLOAD_PART_SIZE_MB = 8
+UPLOAD_MAX_THREADS = 4
 
 
 class BundleAbsent(ReleaseError):
@@ -178,7 +180,7 @@ class CosStore:
             path = Path(body)
             expected = sha256_file(path)
             size = path.stat().st_size
-            factory = lambda: path.open("rb")
+            factory = None
         else:
             require(isinstance(body, bytes), "invalid COS upload body")
             expected = hashlib.sha256(body).hexdigest()
@@ -190,9 +192,20 @@ class CosStore:
         self._mutating()
         started = time.monotonic()
         try:
-            with factory() as stream:
-                response = self._client().put_object(Bucket=self.bucket, Key=key, Body=stream, ACL="private",
-                    ContentLength=str(size), Metadata={"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected})
+            metadata = {"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected}
+            if factory is None:
+                # The SDK switches files larger than PartSize to resumable multipart upload.
+                response = self._client().upload_file(
+                    Bucket=self.bucket, Key=key, LocalFilePath=str(path),
+                    PartSize=UPLOAD_PART_SIZE_MB, MAXThread=UPLOAD_MAX_THREADS,
+                    ACL="private", Metadata=metadata,
+                )
+            else:
+                with factory() as stream:
+                    response = self._client().put_object(
+                        Bucket=self.bucket, Key=key, Body=stream, ACL="private",
+                        ContentLength=str(size), Metadata=metadata,
+                    )
             require(response.get("x-cos-version-id") in {None, "", "null"}, "bucket versioning changed during upload")
         except ReleaseError:
             raise
