@@ -1,6 +1,6 @@
 {
   "application": "qintopia-image",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "databaseMode": "none",
   "browserWorkspaceSchema": 1,
   "assetCapabilityVersion": 1,

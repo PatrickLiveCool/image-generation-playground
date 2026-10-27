@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.3...v0.2.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** grant COS multipart upload actions ([#11](https://github.com/PatrickLiveCool/image-generation-playground/issues/11)) ([a019eb1](https://github.com/PatrickLiveCool/image-generation-playground/commit/a019eb1446ee241766cd9cdb3e04d1757a336e51))
+
 ## [0.2.3](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.2...v0.2.3) (2026-10-27)
 
 
