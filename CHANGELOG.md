@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.2...v0.2.3) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** use resumable COS upload for bundle files ([#9](https://github.com/PatrickLiveCool/image-generation-playground/issues/9)) ([cb00c9d](https://github.com/PatrickLiveCool/image-generation-playground/commit/cb00c9d7382faae335a2f823c56ff9fc1e77c39a))
+
 ## [0.2.2](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.1...v0.2.2) (2026-10-27)
 
 
