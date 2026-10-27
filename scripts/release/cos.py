@@ -192,7 +192,7 @@ class CosStore:
         try:
             with factory() as stream:
                 response = self._client().put_object(Bucket=self.bucket, Key=key, Body=stream, ACL="private",
-                    ContentLength=size, Metadata={"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected})
+                    ContentLength=str(size), Metadata={"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected})
             require(response.get("x-cos-version-id") in {None, "", "null"}, "bucket versioning changed during upload")
         except ReleaseError:
             raise
