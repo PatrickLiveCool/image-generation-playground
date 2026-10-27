@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.0...v0.2.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** expose safe COS upload diagnostics ([#5](https://github.com/PatrickLiveCool/image-generation-playground/issues/5)) ([d3ac53f](https://github.com/PatrickLiveCool/image-generation-playground/commit/d3ac53f15ee3a68cb22b07660db6cc17698cc9ca))
+
 ## [0.2.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.1.0...v0.2.0) (2026-10-26)
 
 
