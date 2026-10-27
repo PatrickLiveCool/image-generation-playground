@@ -7,11 +7,11 @@ export const EMERGENCY_DRAFT_KEY = "image-playground-emergency-drafts-v1"
 const DATABASE = "image-playground-creations"
 const STORE = "workspace"
 const KEY = "current"
-const DRAFT_KEYS = ["prompt", "selectedMappingId", "aspectRatio", "quality", "useUrls", "image1", "image2", "image1Url", "image2Url"] as const
+const DRAFT_KEYS = ["prompt", "documentName", "documentText", "documentFile", "selectedMappingId", "aspectRatio", "quality", "useUrls", "image1", "image2", "image1Url", "image2Url"] as const
 const QUALITIES = new Set(["auto", "low", "medium", "high"])
 
 export function emptyDraft(initial: Partial<CreationDraft> = {}): CreationDraft {
-  return { prompt: "", selectedMappingId: "", aspectRatio: "square", quality: "auto", useUrls: false, image1: null, image2: null, image1Url: "", image2Url: "", ...initial }
+  return { prompt: "", documentName: "", documentText: "", documentFile: null, selectedMappingId: "", aspectRatio: "square", quality: "auto", useUrls: false, image1: null, image2: null, image1Url: "", image2Url: "", ...initial }
 }
 
 export function emptyWorkspace(): CreativeWorkspace {
@@ -105,7 +105,7 @@ export function completeCreationGeneration(workspace: CreativeWorkspace, creatio
     return {
       ...creation, updatedAt: now, selectedVersionId: id, unread: workspace.activeCreationId !== creationId, pendingDraftRevision: null,
       versions: creation.versions.map(version => version.id === id ? { ...version, status: "complete" as const, progress: 100, phase: undefined, imageUrl: result.imageUrl, error: undefined, abortController: undefined } : version),
-      draft: sameDraft ? { ...creation.draft, prompt: "", image1: null, image2: null, image1Url: "", image2Url: "" } : creation.draft,
+      draft: sameDraft ? { ...creation.draft, prompt: "", documentName: "", documentText: "", documentFile: null, image1: null, image2: null, image1Url: "", image2Url: "" } : creation.draft,
       draftRevision: sameDraft ? creation.draftRevision + 1 : creation.draftRevision,
     }
   })
@@ -129,7 +129,7 @@ export function workspaceSnapshot(workspace: CreativeWorkspace): CreativeWorkspa
     id: creation.id, title: creation.title, createdAt: creation.createdAt, updatedAt: creation.updatedAt,
     selectedVersionId: creation.selectedVersionId, unread: creation.unread,
     draftRevision: creation.draftRevision, pendingDraftRevision: creation.pendingDraftRevision,
-    draft: { prompt: creation.draft.prompt, selectedMappingId: creation.draft.selectedMappingId, aspectRatio: creation.draft.aspectRatio, quality: creation.draft.quality, useUrls: creation.draft.useUrls, image1: creation.draft.image1, image2: creation.draft.image2, image1Url: creation.draft.image1Url, image2Url: creation.draft.image2Url },
+    draft: { prompt: creation.draft.prompt, documentName: creation.draft.documentName, documentText: creation.draft.documentText, documentFile: creation.draft.documentFile, selectedMappingId: creation.draft.selectedMappingId, aspectRatio: creation.draft.aspectRatio, quality: creation.draft.quality, useUrls: creation.draft.useUrls, image1: creation.draft.image1, image2: creation.draft.image2, image1Url: creation.draft.image1Url, image2Url: creation.draft.image2Url },
     versions: creation.versions.map(storedGeneration),
   })) }
 }
@@ -153,6 +153,8 @@ export function restoreWorkspace(value: unknown): CreativeWorkspace {
     ids.add(item.id)
     const draft = item.draft
     for (const key of ["prompt", "selectedMappingId", "aspectRatio", "image1Url", "image2Url"]) if (typeof draft[key] !== "string") throw new Error("草稿记录格式无效。")
+    if (draft.documentName !== undefined && typeof draft.documentName !== "string") throw new Error("文档名称记录格式无效。")
+    if (draft.documentText !== undefined && typeof draft.documentText !== "string") throw new Error("文档内容记录格式无效。")
     if (typeof draft.useUrls !== "boolean" || !QUALITIES.has(String(draft.quality))) throw new Error("草稿参数格式无效。")
     const versionIds = new Set<string>()
     const versions = item.versions.map((generation: Generation) => {
@@ -165,14 +167,14 @@ export function restoreWorkspace(value: unknown): CreativeWorkspace {
     const selectedVersionId = completed.some(version => version.id === item.selectedVersionId) ? item.selectedVersionId as string : completed[0]?.id ?? null
     return {
       id: item.id, title: item.title, createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(), updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now(),
-      draft: { prompt: draft.prompt as string, selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls, image1: restoreFile(draft.image1, "reference-1.png"), image2: restoreFile(draft.image2, "reference-2.png"), image1Url: draft.image1Url as string, image2Url: draft.image2Url as string },
+      draft: { prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: restoreFile(draft.documentFile, typeof draft.documentName === "string" && draft.documentName ? draft.documentName : "document.bin"), selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls, image1: restoreFile(draft.image1, "reference-1.png"), image2: restoreFile(draft.image2, "reference-2.png"), image1Url: draft.image1Url as string, image2Url: draft.image2Url as string },
       selectedVersionId, versions, unread: Boolean(item.unread), draftRevision: Number.isInteger(item.draftRevision) ? item.draftRevision as number : 0, pendingDraftRevision: null,
     }
   })
   return { schema: 1, revision: value.revision as number, ...(typeof value.lastWriteId === "string" ? { lastWriteId: value.lastWriteId } : {}), creations, activeCreationId: creations.some(creation => creation.id === value.activeCreationId) ? value.activeCreationId as string : creations[0]?.id ?? null }
 }
 
-type EmergencyDraft = Omit<CreationDraft, "image1" | "image2" | "image1Url" | "image2Url"> & { image1Url?: string; image2Url?: string }
+type EmergencyDraft = Omit<CreationDraft, "image1" | "image2" | "image1Url" | "image2Url" | "documentFile"> & { image1Url?: string; image2Url?: string }
 export interface EmergencyDraftEntry {
   id: string
   title: string
@@ -183,18 +185,20 @@ export interface EmergencyDraftEntry {
   draft: EmergencyDraft
   image1Change?: { revision: number; hasFile: boolean }
   image2Change?: { revision: number; hasFile: boolean }
+  documentChange?: { revision: number; hasFile: boolean }
 }
 
 /** Synchronous emergency storage contains only draft text/parameters, never files or inline image data. */
 export function emergencyDraftEntry(creation: Creation, previous?: Creation, earlier?: EmergencyDraftEntry): EmergencyDraftEntry {
-  const { prompt, selectedMappingId, aspectRatio, quality, useUrls, image1Url, image2Url } = creation.draft
+  const { prompt, documentName, documentText, selectedMappingId, aspectRatio, quality, useUrls, image1Url, image2Url } = creation.draft
   return {
     id: creation.id, title: creation.title, createdAt: creation.createdAt, draftRevision: creation.draftRevision,
     isNew: earlier?.isNew ?? !previous,
     baseVersionId: creation.selectedVersionId,
-    draft: { prompt, selectedMappingId, aspectRatio, quality, useUrls, ...(!/^data:/i.test(image1Url) ? { image1Url } : {}), ...(!/^data:/i.test(image2Url) ? { image2Url } : {}) },
+    draft: { prompt, documentName, documentText, selectedMappingId, aspectRatio, quality, useUrls, ...(!/^data:/i.test(image1Url) ? { image1Url } : {}), ...(!/^data:/i.test(image2Url) ? { image2Url } : {}) },
     image1Change: creation.draft.image1 !== previous?.draft.image1 ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.image1) } : earlier?.image1Change,
     image2Change: creation.draft.image2 !== previous?.draft.image2 ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.image2) } : earlier?.image2Change,
+    documentChange: creation.draft.documentFile !== previous?.draft.documentFile ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.documentFile) } : earlier?.documentChange,
   }
 }
 
@@ -225,7 +229,7 @@ export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string
       current.title = value.title
       restored = { ...restored, creations: [current, ...restored.creations], activeCreationId: restored.activeCreationId ?? current.id }
     } else if (current.draftRevision > (value.draftRevision as number)) continue
-    const recovered: CreationDraft = { ...current.draft, prompt: draft.prompt as string, selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls }
+    const recovered: CreationDraft = { ...current.draft, prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: current.draft.documentFile, selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls }
     for (const key of ["image1Url", "image2Url"] as const) if (typeof draft[key] === "string" && !/^data:/i.test(draft[key])) recovered[key] = draft[key]
     for (const slot of [1, 2] as const) {
       const change = value[`image${slot}Change`]
@@ -233,6 +237,11 @@ export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string
         recovered[slot === 1 ? "image1" : "image2"] = null
         referencesNeedReselect ||= change.hasFile === true
       }
+    }
+    const documentChange = value.documentChange
+    if (object(documentChange) && typeof documentChange.revision === "number" && documentChange.revision > current.draftRevision) {
+      recovered.documentFile = null
+      referencesNeedReselect ||= documentChange.hasFile === true
     }
     restored = changeCreation(restored, current.id, creation => ({ ...creation, selectedVersionId: value.baseVersionId as string | null, draft: recovered, draftRevision: value.draftRevision as number }))
   }

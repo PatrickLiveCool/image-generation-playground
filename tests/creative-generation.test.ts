@@ -9,7 +9,7 @@ import ts from "typescript"
 
 const dir = mkdtempSync(path.join(tmpdir(), "creative-generation-contract-"))
 const compile = (source: string) => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText
-for (const name of ["provider-network", "relay-image", "cos-assets", "stored-generation"]) {
+for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "document-parser", "stored-generation"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8")
   writeFileSync(path.join(dir, `${name}.js`), compile(source).replace('require("cos-nodejs-sdk-v5")', 'require("./cos-sdk-stub")'))
 }

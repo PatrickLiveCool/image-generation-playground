@@ -3,6 +3,7 @@ import { ProviderError, validateProviderSettings } from "@/lib/provider-network"
 import { imageBytes, readImageSource, type ImageBytes } from "@/lib/relay-image"
 import { createCosStore, readOwnedAsset } from "@/lib/cos-assets"
 import { generateAndStore, type CreativeLineage } from "@/lib/stored-generation"
+import { parseDocument } from "@/lib/document-parser"
 
 export const maxDuration = 300
 
@@ -69,13 +70,16 @@ export async function POST(request: Request) {
     if (!["auto", "low", "medium", "high"].includes(quality)) throw new ProviderError("画质参数无效。", 400)
     if (!["square", "portrait", "landscape", "wide", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5"].includes(aspectRatio)) throw new ProviderError("宽高比参数无效。", 400)
     const context = creativeContext(form)
+    const rawDocument = form.get("document")
+    if (rawDocument !== null && !(rawDocument instanceof File)) throw new ProviderError("文档格式无效。", 400)
+    const document = rawDocument instanceof File ? await parseDocument(rawDocument) : undefined
     const reference1 = referenceFrom(form, "image1")
     const reference2 = referenceFrom(form, "image2")
     if (context.baseImageUrl && reference2) {
       throw new ProviderError("继续修改时最多添加一张补充参考图，请使用第一张参考图位置。", 400)
     }
     const references = [reference1, reference2].filter((reference): reference is Reference => Boolean(reference))
-    if (!context.baseImageUrl && !references.length && form.get("mode") === "image-editing") {
+    if (!context.baseImageUrl && !references.length && !document?.images.length && form.get("mode") === "image-editing") {
       throw new ProviderError("编辑模式下至少需要一张参考图。", 400)
     }
     const store = createCosStore()
@@ -97,6 +101,7 @@ export async function POST(request: Request) {
     }
     const result = await generateAndStore(settings, {
       model: model.trim(), prompt, aspectRatio, quality, images,
+      document,
       hasBaseImage: Boolean(context.baseImageUrl), lineage: context.lineage,
     }, store, signal)
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } })

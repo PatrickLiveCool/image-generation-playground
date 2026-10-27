@@ -74,11 +74,12 @@ test("success clears submitted material but preserves newer draft edits", () => 
   const reference = new File(["image"], "reference.png", { type: "image/png" })
   for (const editWhilePending of [false, true]) {
     let state = withVersion()
-    state = patchCreationDraft(state, "a", { prompt: "修改颜色", image1: reference, image1Url: "https://example.test/ref.png", selectedMappingId: "balanced", quality: "high" })
+    state = patchCreationDraft(state, "a", { prompt: "修改颜色", documentName: "brief.md", documentText: "海报背景资料", image1: reference, image1Url: "https://example.test/ref.png", selectedMappingId: "balanced", quality: "high" })
     state = startCreationGeneration(state, "a", generation("a2", "修改颜色"))
     if (editWhilePending) state = patchCreationDraft(state, "a", { prompt: "下一步调整构图" })
     state = completeCreationGeneration(state, "a", "a2", { imageUrl: "/api/assets/a2" })
     assert.equal(get(state).draft.prompt, editWhilePending ? "下一步调整构图" : "")
+    assert.equal(get(state).draft.documentText, editWhilePending ? "海报背景资料" : "")
     assert.equal(get(state).draft.image1, editWhilePending ? reference : null)
     assert.equal(get(state).draft.image1Url, editWhilePending ? "https://example.test/ref.png" : "")
     assert.equal(get(state).draft.selectedMappingId, "balanced")
@@ -116,6 +117,15 @@ test("creation selection, renaming, and edits retain independent drafts and uplo
   assert.equal(activateCreation(state, "missing"), state)
   assert.throws(() => renameCreation(state, "a", "\n"))
   assert.throws(() => renameCreation(state, "a", "分行\n标题"))
+})
+
+test("document attachments survive the canonical workspace snapshot and restore", async () => {
+  const document = new File(["%PDF-1.7"], "poster-brief.pdf", { type: "application/pdf" })
+  const state = addCreation(emptyWorkspace(), newCreation({ documentName: document.name, documentFile: document }, "doc", 1))
+  const restored = restoreWorkspace(workspaceSnapshot(state))
+  assert.equal(restored.creations[0].draft.documentName, document.name)
+  assert.equal(restored.creations[0].draft.documentFile?.name, document.name)
+  assert.equal(await restored.creations[0].draft.documentFile?.text(), "%PDF-1.7")
 })
 
 test("migration retains legacy images as independent V1 creations without inventing ancestry", async () => {
@@ -210,10 +220,11 @@ test("unsupported or corrupt stored workspaces are rejected instead of silently 
 test("synchronous emergency drafts recover the final keystroke before a debounced IndexedDB save", () => {
   const saved = withVersion()
   saved.revision = 5
-  const changed = patchCreationDraft(saved, "a", { prompt: "刷新后仍从 V1 编辑", quality: "high" })
+  const changed = patchCreationDraft(saved, "a", { prompt: "刷新后仍从 V1 编辑", documentName: "poster.md", documentText: "路线与气候资料", quality: "high" })
   const backup = serializeEmergencyDrafts(5, null, [emergencyDraftEntry(get(changed), get(saved))])
   const recovery = recoverEmergencyDrafts(restoreWorkspace(workspaceSnapshot(saved)), backup)
   assert.equal(get(recovery.workspace).draft.prompt, "刷新后仍从 V1 编辑")
+  assert.equal(get(recovery.workspace).draft.documentText, "路线与气候资料")
   assert.equal(get(recovery.workspace).draft.quality, "high")
   assert.equal(get(recovery.workspace).selectedVersionId, "a1")
   assert.equal(recovery.workspace.revision, 5)
@@ -238,10 +249,11 @@ test("a newer emergency edit survives an older in-flight save committing during 
 test("emergency storage excludes files, image data URLs, and arbitrary provider secrets", () => {
   const saved = withVersion()
   const file = new File(["private-image-bytes"], "private-reference.png", { type: "image/png" })
-  const changed = patchCreationDraft(saved, "a", { image1: file, image1Url: "data:image/png;base64,cHJpdmF0ZQ==", prompt: "最新提示词" })
+  const document = new File(["private-document-bytes"], "private-brief.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" })
+  const changed = patchCreationDraft(saved, "a", { image1: file, image1Url: "data:image/png;base64,cHJpdmF0ZQ==", documentFile: document, documentName: document.name, prompt: "最新提示词" })
   Object.assign(get(changed).draft, { apiKey: "private-api-token", baseUrl: "https://private-relay.test" })
   const backup = serializeEmergencyDrafts(saved.revision, null, [emergencyDraftEntry(get(changed), get(saved))])
-  for (const value of ["private-image-bytes", "private-reference.png", "data:image", "cHJpdmF0ZQ==", "private-api-token", "private-relay.test"]) assert.equal(backup.includes(value), false)
+  for (const value of ["private-image-bytes", "private-reference.png", "private-document-bytes", "data:image", "cHJpdmF0ZQ==", "private-api-token", "private-relay.test"]) assert.equal(backup.includes(value), false)
   const recovery = recoverEmergencyDrafts(saved, backup)
   assert.equal(get(recovery.workspace).draft.prompt, "最新提示词")
   assert.equal(get(recovery.workspace).draft.image1, null)

@@ -36,7 +36,7 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsProps) {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      if ((e.shiftKey || e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault()
         if (canGenerate) {
           onGenerate()

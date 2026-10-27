@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
 import ts from "typescript"
 
 const dir = mkdtempSync(path.join(tmpdir(), "cos-storage-contract-"))
-for (const name of ["provider-network", "relay-image", "cos-assets", "stored-generation"]) {
+for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "stored-generation"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8")
   const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText
   // Tests inject a COS client. The stub prevents SDK construction or live calls.
@@ -171,6 +171,22 @@ test("generation archives both references before billing and records result inte
   const serialized = JSON.stringify(manifests(store))
   assert.equal(final.prompt.text,input.prompt)
   for (const secret of [settings.apiKey,settings.baseUrl,config.secretKey,config.cdnAuthKey,config.assetAccessSecret]) assert.equal(serialized.includes(secret),false)
+})
+
+test("generation archives a document and its extracted images before calling the model", async () => {
+  const store = recordingStore()
+  let received: any
+  const document = { name: "poster-brief.docx", mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes: new Uint8Array([80, 75, 3, 4]), text: "春季市集海报", images: [image] }
+  const result = await generateAndStore(settings, { ...input, images: [], document }, store, undefined, async (_settings: typeof settings, value: { prompt: string; images: Array<typeof image> }) => { received = value; return image })
+  const final = manifests(store).at(-1)
+  assert.equal(final.document.name, document.name)
+  assert.equal(final.document.imageCount, 1)
+  assert.equal(final.inputs.length, 1)
+  assert.equal(store.writes.some(write => write.key.endsWith("/inputs/document.docx")), true)
+  assert.equal(store.writes.some(write => write.key.endsWith("/inputs/document-image-1.png")), true)
+  assert.equal(received.images.length, 1)
+  assert.match(received.prompt, /春季市集海报/)
+  assert.match(result.url, /^\/api\/assets\/image-playground\/runs\//)
 })
 
 test("failed storage preflight or reference upload never invokes the model", async () => {

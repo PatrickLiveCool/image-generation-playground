@@ -2,6 +2,7 @@ import COS from "cos-nodejs-sdk-v5"
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { ProviderError } from "./provider-network"
 import { imageBytes, MAX_IMAGE_BYTES, type ImageBytes } from "./relay-image"
+import { MAX_DOCUMENT_BYTES } from "./document-context"
 
 export interface CosConfig {
   bucket: string
@@ -14,7 +15,8 @@ export interface CosConfig {
 }
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-const IMAGE_KEY = new RegExp(`^image-playground/runs/${UUID}/(?:inputs/reference-[12]|outputs/final)\\.(?:png|jpg|webp|gif)$`)
+const IMAGE_KEY = new RegExp(`^image-playground/runs/${UUID}/(?:inputs/(?:reference-[12]|document-image-[12])|outputs/final)\\.(?:png|jpg|webp|gif)$`)
+const DOCUMENT_KEY = new RegExp(`^image-playground/runs/${UUID}/inputs/document\\.(?:txt|md|csv|json|html|xml|pdf|docx)$`)
 const MANIFEST_KEY = new RegExp(`^image-playground/runs/${UUID}/manifest\\.json$`)
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }
 
@@ -92,8 +94,9 @@ export function createCosStore(config = readCosConfig(), suppliedClient?: CosCli
     config,
     assetUrl: key => stableAssetUrl(key, config),
     async put(key, bytes, contentType) {
-      if (!isAssetImageKey(key) && !MANIFEST_KEY.test(key)) throw new ProviderError("对象存储路径无效。", 400)
-      if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new ProviderError("对象存储文件大小无效。", 400)
+      if (!isAssetImageKey(key) && !DOCUMENT_KEY.test(key) && !MANIFEST_KEY.test(key)) throw new ProviderError("对象存储路径无效。", 400)
+      const maxBytes = DOCUMENT_KEY.test(key) ? MAX_DOCUMENT_BYTES : MAX_IMAGE_BYTES
+      if (!bytes.length || bytes.length > maxBytes) throw new ProviderError("对象存储文件大小无效。", 400)
       await new Promise<void>((resolve, reject) => {
         const failed = () => reject(new ProviderError("图片存储服务写入失败，请稍后重试。", 503))
         try {

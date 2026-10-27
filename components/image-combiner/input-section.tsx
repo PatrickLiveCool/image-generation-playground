@@ -5,7 +5,7 @@ import type React from "react"
 import { memo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Settings2 } from "lucide-react"
+import { FileText, Trash2, Settings2, X } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ImageUploadBox } from "./image-upload-box"
 import { ModelSelector } from "./model-selector"
@@ -40,12 +40,17 @@ interface InputSectionProps {
   image1: File | null
   image1Url: string
   image2Url: string
+  documentName: string
+  documentText: string
+  documentFile: File | null
   canGenerate: boolean
   hasImages: boolean
   onGenerate: () => void
   onToast: (message: string, type?: "success" | "error") => void
   onClearAll: () => void
   onImageUpload: (file: File, slot: 1 | 2) => Promise<void>
+  onDocumentUpload: (file: File) => Promise<void>
+  onClearDocument: () => void
   onUrlChange: (url: string, slot: 1 | 2) => void
   onClearImage: (slot: 1 | 2) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
@@ -61,14 +66,15 @@ export const InputSection = memo(function InputSection({
   mappings, apiMode, apiConfigured, onOpenApiSettings,
   prompt, setPrompt, aspectRatio, setAspectRatio, availableAspectRatios,
   selectedMappingId, setSelectedMappingId, quality, setQuality,
-  useUrls, setUseUrls, image1Preview, image2Preview, image1Url, image2Url,
+  useUrls, setUseUrls, image1Preview, image2Preview, image1Url, image2Url, documentName, documentText, documentFile,
   canGenerate, onGenerate, onClearAll, onImageUpload, onUrlChange, onClearImage,
+  onDocumentUpload, onClearDocument,
   onKeyDown, onPromptPaste, onImageFullscreen, promptTextareaRef,
   baseGeneration, pendingGeneration, submitLabel,
 }: InputSectionProps) {
   const pending = Boolean(pendingGeneration)
   const editing = Boolean(baseGeneration?.imageUrl)
-  const hasInput = Boolean(prompt.trim() || image1Preview || image2Preview || image1Url || image2Url)
+  const hasInput = Boolean(prompt.trim() || documentText.trim() || documentFile || image1Preview || image2Preview || image1Url || image2Url)
   const referenceSlots: Array<1 | 2> = editing && !image2Preview && !image2Url ? [1] : [1, 2]
 
   const uploadFile = useCallback((event: React.ChangeEvent<HTMLInputElement>, slot: 1 | 2) => {
@@ -82,6 +88,12 @@ export const InputSection = memo(function InputSection({
     const file = event.dataTransfer.files[0]
     if (file && isImageFile(file)) void onImageUpload(file, slot)
   }, [pending, onImageUpload])
+  const uploadDocument = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    if (pending) return
+    const file = event.target.files?.[0]
+    if (file) void onDocumentUpload(file)
+    event.target.value = ""
+  }, [pending, onDocumentUpload])
   const selectImage = useCallback((slot: 1 | 2) => {
     if (pending) return
     const preview = slot === 1 ? image1Preview : image2Preview
@@ -135,6 +147,23 @@ export const InputSection = memo(function InputSection({
           className="min-h-[110px] w-full resize-y select-text rounded-md border border-gray-600 bg-black/50 p-3 text-sm leading-relaxed text-white focus:border-white focus:outline-none disabled:cursor-wait"
           style={{ fontSize: "16px", WebkitUserSelect: "text", userSelect: "text" }}
         />
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium text-gray-300">背景文档（可选）</p>
+            <label htmlFor="creation-document" className={cn("inline-flex cursor-pointer items-center gap-1 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:border-gray-400 hover:text-white", pending && "pointer-events-none opacity-50")}>
+              <FileText className="size-3.5" />上传文档
+            </label>
+            <input id="creation-document" type="file" accept=".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,text/html,application/xml,text/xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={uploadDocument} />
+          </div>
+          {documentFile || documentText ? (
+            <div className="flex items-start gap-2 rounded-md border border-blue-300/30 bg-blue-300/5 p-2 text-xs text-gray-300">
+              <FileText className="mt-0.5 size-4 shrink-0 text-blue-200" />
+              <div className="min-w-0 flex-1"><p className="truncate text-white">{documentName || "已上传文档"}</p><p className="mt-0.5 text-[11px] text-gray-400">{documentFile ? `${(documentFile.size / 1024 / 1024).toFixed(1)} MB · 提交时保存到私有 COS，并提取文字与图片` : `${documentText.length} 字 · 作为提示词上下文发送`}</p></div>
+              <button type="button" onClick={onClearDocument} disabled={pending} aria-label="移除背景文档" className="rounded p-1 text-gray-400 hover:text-white disabled:opacity-50"><X className="size-3.5" /></button>
+            </div>
+          ) : <p className="text-[11px] leading-relaxed text-gray-500">支持 TXT、MD、CSV、JSON、HTML、XML、PDF 和 DOCX，单个文档最大 10 MB。</p>}
+        </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
