@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from common import (APPLICATION, ARCHIVE, FILES, ROOT_PREFIX, SHA256, ReleaseError,
@@ -30,6 +31,12 @@ def _status(error):
         return int(error.get_status_code())
     except (AttributeError, TypeError, ValueError):
         return getattr(error, "status_code", None)
+
+
+def _upload_diagnostic(error, key, size, started):
+    status = _status(error)
+    status_text = str(status) if status is not None else "unknown"
+    return f"object={key} bytes={size} elapsed={time.monotonic() - started:.1f}s error={type(error).__name__} status={status_text}"
 
 
 def object_identity(key):
@@ -170,25 +177,29 @@ class CosStore:
         if isinstance(body, (str, Path)):
             path = Path(body)
             expected = sha256_file(path)
+            size = path.stat().st_size
             factory = lambda: path.open("rb")
         else:
             require(isinstance(body, bytes), "invalid COS upload body")
             expected = hashlib.sha256(body).hexdigest()
+            size = len(body)
             factory = lambda: io.BytesIO(body)
         if self.head(key) is not None:
             require(self.object_sha(key) == expected, "immutable object already has different bytes")
             return {"status": "existing", "sha256": expected}
         self._mutating()
+        started = time.monotonic()
         try:
             with factory() as stream:
                 response = self._client().put_object(Bucket=self.bucket, Key=key, Body=stream, ACL="private",
-                    Metadata={"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected})
+                    ContentLength=size, Metadata={"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected})
             require(response.get("x-cos-version-id") in {None, "", "null"}, "bucket versioning changed during upload")
         except ReleaseError:
             raise
         except Exception as error:
             if _status(error) not in {409, 412}:
-                raise ReleaseError("COS upload outcome is unknown; inspect the immutable prefix before retrying") from None
+                detail = _upload_diagnostic(error, key, size, started)
+                raise ReleaseError(f"COS upload outcome is unknown ({detail}); inspect the immutable prefix before retrying") from None
         require(self.object_sha(key) == expected, "uploaded object readback checksum mismatch")
         return {"status": "uploaded", "sha256": expected}
 
