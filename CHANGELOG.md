@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.6](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.5...v0.2.6) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** bound COS transfers and retain part failures ([#15](https://github.com/PatrickLiveCool/image-generation-playground/issues/15)) ([4cf203e](https://github.com/PatrickLiveCool/image-generation-playground/commit/4cf203e72f6ad97d3d99a4f804aef190f062d88a))
+* **release:** verify COS paths and isolate accelerated transfers ([#17](https://github.com/PatrickLiveCool/image-generation-playground/issues/17)) ([73e815d](https://github.com/PatrickLiveCool/image-generation-playground/commit/73e815d5fd4733f82a587b8b02dee1f5cb2d874d))
+
 ## [0.2.5](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.4...v0.2.5) (2026-10-27)
 
 
