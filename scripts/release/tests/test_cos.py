@@ -22,6 +22,7 @@ class FakeSDK:
         self.objects = {}
         self.versioning = "Disabled"
         self.puts = []
+        self.content_lengths = []
         self.deletes = []
         self.gets = []
         self.fail_delete = None
@@ -42,8 +43,9 @@ class FakeSDK:
             raise SDKError(404)
         return {"Body": io.BytesIO(self.objects[Key])}
 
-    def put_object(self, Bucket, Key, Body, ACL, Metadata):
+    def put_object(self, Bucket, Key, Body, ACL, Metadata, ContentLength=None):
         self.puts.append((Key, ACL, Metadata))
+        self.content_lengths.append(ContentLength)
         if Key in self.objects:
             raise SDKError(409)
         self.objects[Key] = Body.read()
@@ -79,6 +81,7 @@ class CosTests(unittest.TestCase):
             result = upload_bundle(fake_store(sdk, "upload"), directory)
             self.assertEqual(result["manifestSha256"], anchor)
             self.assertEqual(len(sdk.puts), 4)
+            self.assertEqual(sdk.content_lengths, [(directory / name).stat().st_size for name in FILES])
             self.assertTrue(all(acl == "private" and metadata["x-cos-forbid-overwrite"] == "true" for _, acl, metadata in sdk.puts))
             upload_bundle(fake_store(sdk, "upload"), directory)
             self.assertEqual(len(sdk.puts), 4)
@@ -136,6 +139,18 @@ class CosTests(unittest.TestCase):
             fake_store(sdk, "upload").put_immutable(key, b"expected")
         with self.assertRaises(ReleaseError) as caught:
             fake_store(sdk).read_json(key.replace("manifest.json", "deployed.json"))
+        self.assertNotIn("sensitive-sdk-response", str(caught.exception))
+
+    def test_unknown_upload_reports_safe_diagnostics_without_sdk_message(self):
+        sdk = FakeSDK()
+        key = release_prefix("v0.1.0", REV) + "manifest.json"
+
+        def fail(**kwargs):
+            raise SDKError(None)
+
+        sdk.put_object = fail
+        with self.assertRaisesRegex(ReleaseError, r"object=.*manifest\.json bytes=8 elapsed=.*error=SDKError status=unknown") as caught:
+            fake_store(sdk, "upload").put_immutable(key, b"expected")
         self.assertNotIn("sensitive-sdk-response", str(caught.exception))
 
 
