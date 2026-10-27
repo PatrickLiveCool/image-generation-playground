@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.4...v0.2.5) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** scope multipart listing at bucket level ([#13](https://github.com/PatrickLiveCool/image-generation-playground/issues/13)) ([6b0bedb](https://github.com/PatrickLiveCool/image-generation-playground/commit/6b0bedb392080e357773c7bade67753cdbf52304))
+
 ## [0.2.4](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.3...v0.2.4) (2026-10-27)
 
 
