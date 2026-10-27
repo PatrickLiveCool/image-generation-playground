@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.1...v0.2.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** send COS content length as text ([#7](https://github.com/PatrickLiveCool/image-generation-playground/issues/7)) ([422cf69](https://github.com/PatrickLiveCool/image-generation-playground/commit/422cf69733137700432e637aed83b7fcc50a48d9))
+
 ## [0.2.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.0...v0.2.1) (2026-10-27)
 
 
