@@ -147,7 +147,19 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertRegex(release, r"upload_only:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false")
         deployment = release.split("\n  deploy:", 1)[1]
         self.assertIn("needs: [validate, package-upload]", deployment)
-        self.assertIn("if: github.event_name == 'release' || inputs.upload_only != true", deployment)
+        self.assertIn("if: (github.event_name == 'release' || inputs.upload_only != true) && inputs.network_probe != true", deployment)
+
+    def test_network_probe_is_isolated_from_release_objects_and_deployment(self) -> None:
+        workflow = self.workflows["release"]
+        probe = workflow.split("\n  network-probe:", 1)[1].split("\n  validate:", 1)[0]
+        self.assertIn("inputs.network_probe == true && inputs.upload_only == true", probe)
+        self.assertIn("github.event_name == 'workflow_dispatch'", probe)
+        self.assertIn("github.ref == 'refs/heads/codex/probe-cos-network-path'", probe)
+        self.assertIn("scripts/release/probe_network.py", probe)
+        self.assertNotIn("DEPLOY_SSH_KEY", probe)
+        self.assertNotIn("orchestrate.py", probe)
+        self.assertNotIn("cos.py upload", probe)
+        self.assertIn("needs: validate\n    if: inputs.network_probe != true", workflow)
 
     def test_release_please_matches_standard_token_based_flow(self) -> None:
         workflow = self.workflows["release-please"]

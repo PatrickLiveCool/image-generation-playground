@@ -25,6 +25,8 @@ GitHub `production` Environment 保存下列项目专用 Secrets：
 
 Variables 为 `COS_BUCKET`、`COS_REGION`、`DEPLOY_HOST`、`DEPLOY_USER`。`COS_ENDPOINT` 可选，默认使用区域端点。这里不保存用户中转 Token、应用 COS 密钥或 `ASSET_ACCESS_SECRET`。
 
+`COS_UPLOAD_ENDPOINT` 可单独设为 `cos.accelerate.myqcloud.com`，只影响发布上传及其字节回读。列举对象和查询桶版本状态仍使用区域端点；服务器读取、清理和用户图片链路不使用该变量。启用前须获得全球加速流量费用授权并为桶开启该功能；不应把所有请求共用的 `COS_ENDPOINT` 直接改成加速域名。清空 `COS_UPLOAD_ENDPOINT` 可恢复区域传输路径。
+
 服务器配置为 `/etc/qintopia-image-release/config.json`，只读 COS 凭据为同目录的 `cos-readonly.json`；目录 0700，凭据 0600，均为 root 所有。工具位于 `/opt/qintopia-image-release/`。应用继续读取原 `/etc/qintopia-image-app/environment`，不因工具安装而替换密钥。
 
 发布制品位于 `qintopia-image/releases/vX.Y.Z/<完整提交>/`，包括 `app.tar.gz`、`manifest.json`、`SHA256SUMS` 和 `sbom.spdx.json`。只有服务器与公网验证成功后才写入 `deployed.json`。用户图片仍在 `image-playground/`，与发布身份和清理范围隔离。

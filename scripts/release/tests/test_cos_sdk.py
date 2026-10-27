@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -89,9 +90,13 @@ class OfflineCosAdapter(BaseAdapter):
             operation = "part"
         elif "uploadId" in query:
             operation = "abort" if request.method == "DELETE" else "complete"
+        elif request.method == "GET" and "prefix" in query:
+            operation = "list"
+        elif request.method == "DELETE":
+            operation = "delete"
         else:
             operation = "put" if request.method == "PUT" else "get"
-        call = {"operation": operation, "key": key,
+        call = {"operation": operation, "key": key, "host": parsed.hostname,
                 "contentLength": text(request.headers.get("Content-Length")),
                 "contentLengthType": type(request.headers.get("Content-Length")).__name__,
                 "contentMD5": text(request.headers.get("Content-MD5")),
@@ -108,6 +113,13 @@ class OfflineCosAdapter(BaseAdapter):
             return self.response(request, headers={"Content-Length": str(len(self.objects[key]))})
         if operation == "versioning":
             return self.response(request, b"<VersioningConfiguration/>")
+        if operation == "list":
+            contents = "".join(f'<Contents><Key>{name}</Key><Size>{len(body)}</Size><ETag>"offline"</ETag></Contents>'
+                               for name, body in sorted(self.objects.items()) if name.startswith(query["prefix"][0]))
+            return self.response(request, ("<ListBucketResult>" + contents + "<IsTruncated>false</IsTruncated></ListBucketResult>").encode())
+        if operation == "delete":
+            self.objects.pop(key, None)
+            return self.response(request)
         if operation == "list_multipart":
             return self.response(request, b"<ListMultipartUploadsResult><IsTruncated>false</IsTruncated></ListMultipartUploadsResult>")
         if operation == "create":
@@ -153,13 +165,16 @@ class OfflineCosAdapter(BaseAdapter):
 @unittest.skipIf(CosConfig is None, "install scripts/release/requirements.txt to exercise the pinned COS SDK")
 class CosSDKTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict("os.environ", {"COS_ENDPOINT": "", "COS_UPLOAD_ENDPOINT": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
         # An adapter bug or unexpected SDK path must fail, never make a real request.
         for target in ("socket.create_connection", "socket.socket.connect", "socket.socket.connect_ex"):
             guard = patch(target, side_effect=AssertionError("Real sockets are forbidden in COS SDK tests"))
             guard.start()
             self.addCleanup(guard.stop)
 
-    def store(self, adapter):
+    def store(self, adapter, role="upload"):
         session = requests.Session()
         session.trust_env = False
         session.mount("https://", adapter)
@@ -168,7 +183,111 @@ class CosSDKTests(unittest.TestCase):
         config = CosConfig(Region="ap-shanghai", SecretId=SECRET_ID, SecretKey=SECRET_KEY,
                            Token=SECRET_TOKEN, Scheme="https", Timeout=(10, 60))
         client = release_cos.make_cos_client(config, session=session)
-        return release_cos.CosStore(BUCKET, "ap-shanghai", role="upload", client=client)
+        return release_cos.CosStore(BUCKET, "ap-shanghai", role=role, client=client)
+
+    def transport_factory(self, adapter):
+        original_factory = release_cos.make_cos_client
+
+        def make(config, *, session=None, retry=release_cos.UPLOAD_RETRIES):
+            self.assertIsNone(session)
+            transport_session = requests.Session()
+            transport_session.trust_env = False
+            transport_session.mount("https://", adapter)
+            transport_session.mount("http://", adapter)
+            self.addCleanup(transport_session.close)
+            return original_factory(config, session=transport_session, retry=retry)
+
+        return make
+
+    def test_explicit_acceleration_separates_control_and_transfer_requests_for_files_and_markers(self):
+        for role in ("upload", "marker"):
+            with self.subTest(role=role):
+                control = OfflineCosAdapter()
+                transfer = OfflineCosAdapter()
+                transfer.objects = control.objects
+                store = self.store(control, role)
+                key = KEY if role == "upload" else release_prefix("v0.2.5", REVISION) + "deployed.json"
+                with patch.dict("os.environ", {"COS_UPLOAD_ENDPOINT": "cos.accelerate.myqcloud.com"}), \
+                     patch.object(release_cos, "make_cos_client", side_effect=self.transport_factory(transfer)) as factory, \
+                     contextlib.redirect_stderr(io.StringIO()), \
+                     tempfile.TemporaryDirectory(prefix="cos-sdk-routing-") as directory:
+                    self.assertEqual(store.list(release_prefix("v0.2.5", REVISION)), [])
+                    if role == "upload":
+                        artifact = Path(directory) / ARCHIVE
+                        with artifact.open("wb") as output:
+                            output.truncate(2 * 1024 * 1024 + 1)
+                        result = store.put_immutable(key, artifact)
+                        # The same transfer client must also handle small metadata PUTs.
+                        store.put_immutable(release_prefix("v0.2.5", REVISION) + "manifest.json", b'{"offline":true}')
+                    else:
+                        result = store.put_immutable(key, b'{"deployment":"offline"}')
+                    self.assertIsNotNone(store.head(key))
+                    self.assertEqual(store.object_sha(key), result["sha256"])
+                    self.assertEqual(factory.call_count, 1)
+                self.assertEqual(result["status"], "uploaded")
+                self.assertEqual({call["host"] for call in control.calls}, {f"{BUCKET}.cos.ap-shanghai.myqcloud.com"})
+                self.assertEqual({call["host"] for call in transfer.calls}, {f"{BUCKET}.cos.accelerate.myqcloud.com"})
+                self.assertEqual({call["operation"] for call in control.calls}, {"list", "head", "versioning"})
+                self.assertTrue({"put", "get"} <= {call["operation"] for call in transfer.calls})
+                self.assertFalse({"list", "head", "versioning", "delete"} & {call["operation"] for call in transfer.calls})
+                if role == "upload":
+                    self.assertTrue({"list_multipart", "create", "part", "complete"} <= {call["operation"] for call in transfer.calls})
+                self.assertEqual(hashlib.sha256(control.objects[key]).hexdigest(), result["sha256"])
+
+    def test_unconfigured_upload_endpoint_keeps_the_original_regional_client(self):
+        for configured in (False, True):
+            with self.subTest(empty_variable=configured), patch.dict("os.environ", {}):
+                if configured:
+                    os.environ["COS_UPLOAD_ENDPOINT"] = ""
+                else:
+                    os.environ.pop("COS_UPLOAD_ENDPOINT", None)
+                regional = OfflineCosAdapter()
+                store = self.store(regional)
+                with patch.object(release_cos, "make_cos_client", side_effect=AssertionError("No transfer client should be created")) as factory, \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    store.list(release_prefix("v0.2.5", REVISION))
+                    result = store.put_immutable(KEY, b"offline release")
+                    self.assertEqual(store.object_sha(KEY), result["sha256"])
+                    factory.assert_not_called()
+                self.assertEqual({call["host"] for call in regional.calls}, {f"{BUCKET}.cos.ap-shanghai.myqcloud.com"})
+                self.assertTrue({"list", "head", "versioning", "put", "get"} <= {call["operation"] for call in regional.calls})
+                self.assertIsNone(store.transfer_client)
+
+    def test_reader_and_retention_ignore_upload_acceleration_and_stay_regional(self):
+        for role in ("reader", "retention"):
+            with self.subTest(role=role):
+                regional = OfflineCosAdapter()
+                regional.objects[KEY] = b"existing immutable release"
+                store = self.store(regional, role)
+                with patch.dict("os.environ", {"COS_UPLOAD_ENDPOINT": "cos.accelerate.myqcloud.com"}), \
+                     patch.object(release_cos, "make_cos_client", side_effect=AssertionError("Read roles must not construct an accelerated client")) as factory:
+                    self.assertEqual(len(store.list(release_prefix("v0.2.5", REVISION))), 1)
+                    self.assertIsNotNone(store.head(KEY))
+                    self.assertEqual(store.read_bytes(KEY), b"existing immutable release")
+                    if role == "retention":
+                        store.delete(KEY)
+                        self.assertNotIn(KEY, regional.objects)
+                    factory.assert_not_called()
+                self.assertEqual({call["host"] for call in regional.calls}, {f"{BUCKET}.cos.ap-shanghai.myqcloud.com"})
+                self.assertFalse({"put", "create", "part", "complete"} & {call["operation"] for call in regional.calls})
+                self.assertIsNone(store.transfer_client)
+
+    def test_invalid_upload_endpoint_cannot_construct_a_transport_or_send_payloads(self):
+        for endpoint in ("untrusted.example", "https://cos.accelerate.myqcloud.com", "cos.ap-shanghai.tencentcos.cn"):
+            with self.subTest(endpoint=endpoint):
+                regional = OfflineCosAdapter()
+                store = self.store(regional)
+                with patch.dict("os.environ", {"COS_UPLOAD_ENDPOINT": endpoint}), \
+                     patch.object(release_cos, "make_cos_client", side_effect=AssertionError("Invalid endpoint must be rejected before constructing a client")) as factory, \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(ReleaseError, "unsupported release upload endpoint"):
+                        store._data_client()
+                    self.assertEqual(regional.calls, [])
+                    with self.assertRaisesRegex(ReleaseError, "unsupported release upload endpoint"):
+                        store.put_immutable(KEY, b"must never be uploaded")
+                    factory.assert_not_called()
+                self.assertTrue(all(call["operation"] in {"head", "versioning"} for call in regional.calls))
+                self.assertEqual(regional.objects, {})
 
     def test_upload_factory_sets_send_timeout_and_retry_budget_without_changing_reader_defaults(self):
         credentials = {"SecretId": SECRET_ID, "SecretKey": SECRET_KEY, "Token": SECRET_TOKEN}
