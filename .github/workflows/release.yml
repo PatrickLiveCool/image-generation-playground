@@ -9,6 +9,10 @@ on:
         description: Published stable release to replay, for example v0.2.0
         required: true
         type: string
+      upload_only:
+        description: Build, upload and verify only; do not deploy or switch production
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -87,6 +91,11 @@ jobs:
       - name: Build application
         working-directory: source
         run: pnpm build
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned COS SDK for offline transport tests
+        run: python3 -m pip install --disable-pip-version-check --no-input -r harness/scripts/release/requirements.txt
       - name: Test trusted release tools
         run: python3 -m unittest discover -s harness/scripts/release/tests -v
 
@@ -201,6 +210,7 @@ jobs:
   deploy:
     name: Deploy published release
     needs: [validate, package-upload]
+    if: github.event_name == 'release' || inputs.upload_only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: production
