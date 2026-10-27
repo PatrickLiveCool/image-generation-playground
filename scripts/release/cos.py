@@ -158,6 +158,7 @@ class CosStore:
         require(isinstance(self.bucket, str) and re.fullmatch(r"[a-z0-9-]+-\d+", self.bucket), "COS bucket is missing or invalid")
         require(isinstance(self.region, str) and re.fullmatch(r"[a-z0-9-]+", self.region), "COS region is missing or invalid")
         self.role, self.credentials, self.client = role, credentials, client
+        self.transfer_client = None
         self.prefix = ROOT_PREFIX
         self._mutation_checked = False
 
@@ -185,6 +186,25 @@ class CosStore:
         self.client = make_cos_client(CosConfig(**config), retry=UPLOAD_RETRIES if self.role in {"upload", "marker"} else 3)
         return self.client
 
+    def _data_client(self):
+        """Route only release payload traffic through an explicitly chosen endpoint.
+
+        Bucket listing/versioning remain on the regional API; acceleration does
+        not support all of those control operations. Readers/retention stay regional.
+        """
+        endpoint = os.environ.get("COS_UPLOAD_ENDPOINT", "")
+        if self.role not in {"upload", "marker"} or not endpoint:
+            return self._client()
+        require(endpoint == "cos.accelerate.myqcloud.com", "unsupported release upload endpoint")
+        if self.transfer_client is None:
+            from qcloud_cos import CosConfig
+            original = self._client().get_conf()
+            config = CosConfig(Region=self.region, Endpoint=endpoint, SecretId=original._secret_id,
+                               SecretKey=original._secret_key, Token=original._token,
+                               Scheme="https", Timeout=UPLOAD_TIMEOUT)
+            self.transfer_client = make_cos_client(config)
+        return self.transfer_client
+
     def _mutating(self):
         require(self.role in {"upload", "marker", "retention"}, "read-only COS role cannot mutate objects")
         if self._mutation_checked:
@@ -211,7 +231,7 @@ class CosStore:
     def _stream(self, key):
         object_identity(key)
         try:
-            response = self._client().get_object(Bucket=self.bucket, Key=key)
+            response = self._data_client().get_object(Bucket=self.bucket, Key=key)
             body = response["Body"]
             return body.get_raw_stream() if hasattr(body, "get_raw_stream") else io.BytesIO(body) if isinstance(body, bytes) else body
         except Exception:
@@ -302,14 +322,14 @@ class CosStore:
             metadata = {"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected}
             if factory is None:
                 # The SDK switches files larger than PartSize to resumable multipart upload.
-                response = self._client().upload_file(
+                response = self._data_client().upload_file(
                     Bucket=self.bucket, Key=key, LocalFilePath=str(path),
                     PartSize=UPLOAD_PART_SIZE_MB, MAXThread=UPLOAD_MAX_THREADS,
                     ACL="private", Metadata=metadata, EnableMD5=True,
                 )
             else:
                 with factory() as stream:
-                    response = self._client().put_object(
+                    response = self._data_client().put_object(
                         Bucket=self.bucket, Key=key, Body=stream, ACL="private",
                         ContentLength=str(size), Metadata=metadata,
                     )

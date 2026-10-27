@@ -113,6 +113,7 @@ def probe(control, clients):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--include-acceleration", action="store_true", help="Only after acceleration usage and its additional traffic fees are authorized")
     args = parser.parse_args()
     from qcloud_cos import CosConfig, CosS3Client
     import requests
@@ -125,7 +126,10 @@ def main():
     config = store._client().get_conf()
     clients, sessions = {}, []
     try:
-        for label, endpoint in ENDPOINTS.items():
+        endpoints = dict(ENDPOINTS)
+        if args.include_acceleration:
+            endpoints["accelerated"] = "cos.accelerate.myqcloud.com"
+        for label, endpoint in endpoints.items():
             host = BUCKET + "." + endpoint
             addresses = sorted({row[4][0] for row in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
             emit({"event": "endpoint", "label": label, "host": host, "addresses": addresses})

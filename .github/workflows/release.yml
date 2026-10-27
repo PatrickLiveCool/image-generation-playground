@@ -17,6 +17,10 @@ on:
         description: Synthetic endpoint comparison only; requires upload_only and never deploys
         type: boolean
         default: false
+      network_probe_acceleration:
+        description: Include enabled COS acceleration in network probe; requires traffic-fee authorization
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,7 +57,13 @@ jobs:
           COS_REGION: ${{ vars.COS_REGION }}
           UPLOAD_COS_SECRET_ID: ${{ secrets.UPLOAD_COS_SECRET_ID }}
           UPLOAD_COS_SECRET_KEY: ${{ secrets.UPLOAD_COS_SECRET_KEY }}
-        run: python3 -u scripts/release/probe_network.py --output "$RUNNER_TEMP/cos-network-probe.json"
+          PROBE_ACCELERATION: ${{ inputs.network_probe_acceleration }}
+        run: |
+          args=()
+          if [ "$PROBE_ACCELERATION" = true ]; then
+            args+=(--include-acceleration)
+          fi
+          python3 -u scripts/release/probe_network.py --output "$RUNNER_TEMP/cos-network-probe.json" "${args[@]}"
       - name: Summarize diagnostic results
         if: always()
         run: |
@@ -147,6 +157,7 @@ jobs:
       COS_BUCKET: ${{ vars.COS_BUCKET }}
       COS_REGION: ${{ vars.COS_REGION }}
       COS_ENDPOINT: ${{ vars.COS_ENDPOINT }}
+      COS_UPLOAD_ENDPOINT: ${{ vars.COS_UPLOAD_ENDPOINT }}
     steps:
       - name: Check out frozen release tools
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
