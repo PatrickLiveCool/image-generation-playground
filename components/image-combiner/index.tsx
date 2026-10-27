@@ -7,6 +7,7 @@ import { Settings2 } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { resolveModelMapping } from "@/lib/model-mappings"
 import { prepareReference } from "@/lib/prepare-reference"
+import { isDocumentFile, validateDocumentFile } from "@/lib/document-context"
 import type { Creation, CreationDraft } from "@/lib/creation-types"
 import { useApiSettings } from "./hooks/use-api-settings"
 import { useCreativeWorkspace, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
@@ -79,6 +80,9 @@ export function ImageCombiner(): ReactElement {
     refreshUploads()
     patchDraft(creationId, slot === 1 ? { image1: null, image1Url: "" } : { image2: null, image2Url: "" })
   }, [patchDraft, refreshUploads])
+  const clearDocument = useCallback((creationId: string) => {
+    patchDraft(creationId, { documentName: "", documentText: "", documentFile: null })
+  }, [patchDraft])
   const upload = useCallback(async (creationId: string, file: File, slot: 1 | 2) => {
     const creation = getCreation(creationId)
     if (!creation || creation.versions.some(version => version.status === "loading")) return
@@ -105,6 +109,18 @@ export function ImageCombiner(): ReactElement {
       refreshUploads()
     }
   }, [getCreation, patchDraft, refreshUploads, showToast])
+  const uploadDocument = useCallback(async (creationId: string, file: File) => {
+    const creation = getCreation(creationId)
+    if (!creation || creation.versions.some(version => version.status === "loading")) return
+    try {
+      validateDocumentFile(file)
+      if (!mounted.current) return
+      patchDraft(creationId, { documentName: file.name, documentText: "", documentFile: file })
+      showToast(`已载入文档：${file.name}，提交时会保存到私有 COS`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "读取文档失败。", "error")
+    }
+  }, [getCreation, patchDraft, showToast])
 
   const submit = useCallback((creationId: string) => {
     if ([...uploadTokens.current.keys()].some(key => key.startsWith(`${creationId}:`))) return
@@ -114,6 +130,7 @@ export function ImageCombiner(): ReactElement {
     const draft = workspace.activeCreation?.draft
     workspace.createCreation(draft ? { selectedMappingId: draft.selectedMappingId, aspectRatio: draft.aspectRatio, quality: draft.quality } : {})
   }
+  const activeCreationId = workspace.activeCreation?.id
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-black font-sans text-white">
@@ -128,7 +145,7 @@ export function ImageCombiner(): ReactElement {
         {workspace.ready && workspace.activeCreation ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-white/10 bg-black/75 p-2 lg:flex-row lg:overflow-hidden">
             <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
-            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
+            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
         <footer className="flex shrink-0 items-center justify-center gap-3 pt-3 text-center text-xs text-gray-400">
@@ -153,12 +170,14 @@ interface EditorProps {
   onToast: Toast
   onUpload: (id: string, file: File, slot: 1 | 2) => Promise<void>
   onClearImage: (id: string, slot: 1 | 2) => void
+  onDocumentUpload: (file: File) => Promise<void>
+  onClearDocument: () => void
   uploading: boolean
   onGenerate: (id: string) => void
   onCancel: (id: string, generationId: string) => void
 }
 
-function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onUpload, onClearImage, uploading, onGenerate, onCancel }: EditorProps) {
+function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel }: EditorProps) {
   const draft = creation.draft
   const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
   const pending = creation.versions.find(version => version.status === "loading")
@@ -223,7 +242,7 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
   const clearImage = (slot: 1 | 2) => { if (!pending) onClearImage(creation.id, slot) }
   const clearAll = () => {
     if (pending) return
-    onClearImage(creation.id, 1); onClearImage(creation.id, 2)
+    onClearImage(creation.id, 1); onClearImage(creation.id, 2); onClearDocument()
     patch({ prompt: "" })
     promptRef.current?.focus()
   }
@@ -246,7 +265,10 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
     event.preventDefault()
     if (pending) return
     const file = event.dataTransfer.files[0]
-    if (file) void upload(file, base || !draft.image1 ? 1 : 2)
+    if (file) {
+      if (isDocumentFile(file)) void onDocumentUpload(file)
+      else void upload(file, base || !draft.image1 ? 1 : 2)
+    }
   }
 
   return (
@@ -257,11 +279,12 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
           selectedMappingId={draft.selectedMappingId} setSelectedMappingId={selectedMappingId => patch({ selectedMappingId })} quality={draft.quality} setQuality={quality => patch({ quality })}
           thinkingLevel="minimal" setThinkingLevel={noop} resolution="1K" setResolution={noop} useGrounding={false} setUseGrounding={noop}
           useUrls={draft.useUrls} setUseUrls={changeMode} image1Preview={image1Preview} image2Preview={image2Preview} image1={draft.image1} image1Url={draft.image1Url} image2Url={draft.image2Url}
+          documentName={draft.documentName ?? ""} documentText={draft.documentText ?? ""} documentFile={draft.documentFile ?? null} onDocumentUpload={onDocumentUpload} onClearDocument={onClearDocument}
           canGenerate={canGenerate} hasImages={Boolean(base || referenceCount)} onGenerate={() => onGenerate(creation.id)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
           onUrlChange={(url, slot) => { clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
-          onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
-          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理参考图…" : base ? `修改 V${base.version ?? 1}` : "生成图片"} />
-        {uploading && <p role="status" className="text-xs text-gray-400">正在处理参考图，可切换创作；完成后会放回当前创作。</p>}
+          onKeyDown={event => { if ((event.shiftKey || event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
+          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理上传内容…" : base ? `修改 V${base.version ?? 1}` : "生成图片"} />
+        {uploading && <p role="status" className="text-xs text-gray-400">正在处理上传内容，可切换创作；完成后会放回当前创作。</p>}
         <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
       </div>
       <div className="order-2 h-[420px] min-w-0 lg:order-none lg:h-auto lg:min-h-0">

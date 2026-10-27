@@ -44,6 +44,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
               <li>继续填写修改要求，点击“修改 V1”等按钮即可生成新版本；按钮中的版本号表示本轮使用的基准图。</li>
               <li>想从旧版本继续时，在创作历史中选中它，再提交修改要求。已有版本都会保留。</li>
               <li>首次生成可添加最多两张参考图；修改已有版本时，可再添加一张补充参考图。提交的单张参考图不超过 10 MB。</li>
+              <li>提示词下方可以上传 TXT、MD、CSV、JSON、HTML、XML、PDF 或 DOCX 文档，提交时原始文档会保存到私有 COS，服务端提取文字和可用图片后作为本轮上下文发送。</li>
               <li>修改会将基准图交给模型，但结果仍由模型生成，不能保证未提及的区域像素完全不变。</li>
               <li>比例选项按所选模型的能力展示，包含 1:1、9:16、16:9、4:3、3:4、3:2、2:3、5:4、4:5 和 21:9 中可用的选项。</li>
               <li>Images 接口会将比例转换为尺寸参数，Chat Completions 接口会在提示词中表达期望比例；实际输出仍由中转和模型决定。</li>
@@ -76,7 +77,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
             <h3 className="text-lg font-semibold text-white mb-2">键盘快捷键</h3>
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>
-                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + Enter</kbd> — 提交当前生成或修改要求
+                <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">Shift + Enter</kbd> — 提交当前生成或修改要求（也支持 ⌘/Ctrl + Enter）
               </li>
               <li>
                 <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-xs">⌘/Ctrl + C</kbd> — 将图片复制到剪贴板

@@ -25,7 +25,7 @@ export function KeyboardShortcutsDialog({ triggerVariant = "default" }: Keyboard
   }, [])
 
   const shortcuts = [
-    { key: "Cmd/Ctrl + Enter", description: "生成图像" },
+    { key: "Shift + Enter", description: "生成图像（也支持 Cmd/Ctrl + Enter）" },
     { key: "Cmd/Ctrl + V", description: "从剪贴板粘贴图片" },
     { key: "Cmd/Ctrl + C", description: "复制生成的图片" },
     { key: "Cmd/Ctrl + D", description: "下载图片" },

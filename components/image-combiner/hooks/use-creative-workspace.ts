@@ -139,7 +139,7 @@ export function useCreativeWorkspace() {
         saveEmergencyDrafts()
         setWorkspace(restored)
         setReady(true)
-        setStorageError(referencesNeedReselect ? "最新文字草稿已恢复；刷新前未保存完成的参考图需要重新选择。" : null)
+        setStorageError(referencesNeedReselect ? "最新文字草稿已恢复；刷新前未保存完成的参考图或文档需要重新选择。" : null)
       } catch (error) {
         if (cancelled) return
         writableRef.current = false

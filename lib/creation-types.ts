@@ -2,6 +2,9 @@ import type { Generation, Quality } from "@/components/image-combiner/types"
 
 export interface CreationDraft {
   prompt: string
+  documentName?: string
+  documentText?: string
+  documentFile?: File | null
   selectedMappingId: string
   aspectRatio: string
   quality: Quality

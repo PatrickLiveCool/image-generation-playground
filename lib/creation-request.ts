@@ -2,6 +2,7 @@ import type { Generation } from "@/components/image-combiner/types"
 import type { Creation } from "./creation-types"
 import { normalizeProviderSettings, validateProviderSettings, type ModelMapping, type ProviderSettings } from "./api-provider-types"
 import { normalizeModelMappings, resolveModelMapping, validateModelMappings } from "./model-mappings"
+import { composePrompt, MAX_DOCUMENT_CHARS, validateDocumentFile } from "./document-context"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024
@@ -31,7 +32,12 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   if (!UUID.test(creation.id) || !UUID.test(generationId)) throw new Error("创作或版本标识无效，请刷新后重试。")
   if (creation.versions.some(version => version.status === "loading")) throw new Error("当前创作正在生成，请等待完成后再修改。")
   if (creation.versions.some(version => version.id === generationId)) throw new Error("版本标识重复，请重新提交。")
-  if (!draft.prompt.trim() || draft.prompt.length > 5000) throw new Error("请输入提示词，最多 5000 字。")
+  const documentName = draft.documentName ?? ""
+  const documentText = draft.documentText ?? ""
+  const effectivePrompt = composePrompt(draft.prompt, documentName, documentText)
+  if (!draft.prompt.trim() || effectivePrompt.length > 5000) throw new Error(documentText.trim() ? "提示词和文档上下文合计不能超过 5000 字，请精简提示词或文档。" : "请输入提示词，最多 5000 字。")
+  if (documentText.length > MAX_DOCUMENT_CHARS) throw new Error(`文档文字不能超过 ${MAX_DOCUMENT_CHARS} 个字符，请重新上传精简后的文档。`)
+  if (draft.documentFile) validateDocumentFile(draft.documentFile)
 
   const providerError = validateProviderSettings(settings)
   if (providerError) throw new Error(providerError)
@@ -74,7 +80,7 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   const formData = new FormData()
   for (const [key, value] of Object.entries({
     baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiMode: provider.apiMode,
-    selectedModel: mapping.modelId, prompt: draft.prompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
+    selectedModel: mapping.modelId, prompt: effectivePrompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
     mode, creationId: creation.id, clientVersionId: generationId, version: String(version),
   })) formData.set(key, value)
   if (base?.imageUrl) {
@@ -85,6 +91,7 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
     if (typeof reference === "string") formData.set(`image${index + 1}Url`, reference)
     else formData.set(`image${index + 1}`, reference)
   })
+  if (draft.documentFile) formData.set("document", draft.documentFile, draft.documentFile.name)
 
   // Credentials and reference capabilities belong only in the request, never in history metadata.
   const generation: Generation = {
