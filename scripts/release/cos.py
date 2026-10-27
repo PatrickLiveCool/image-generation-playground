@@ -5,11 +5,13 @@ import argparse
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -20,8 +22,11 @@ from common import (APPLICATION, ARCHIVE, FILES, ROOT_PREFIX, SHA256, ReleaseErr
 MARKER = "deployed.json"
 OBJECTS = set(FILES) | {MARKER}
 KEY = re.compile(r"qintopia-image/releases/(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))/([0-9a-f]{40})/([^/]+)\Z")
-UPLOAD_PART_SIZE_MB = 8
-UPLOAD_MAX_THREADS = 4
+UPLOAD_PART_SIZE_MB = 2
+UPLOAD_MAX_THREADS = 2
+UPLOAD_RETRIES = 1
+UPLOAD_TIMEOUT = (60, 60)
+_DIAGNOSTIC_LOCK = threading.Lock()
 
 
 class BundleAbsent(ReleaseError):
@@ -30,9 +35,107 @@ class BundleAbsent(ReleaseError):
 
 def _status(error):
     try:
-        return int(error.get_status_code())
+        value = error.get_status_code() if hasattr(error, "get_status_code") else getattr(error, "status_code", None)
+        code = int(value)
+        return code if 100 <= code <= 599 else None
     except (AttributeError, TypeError, ValueError):
-        return getattr(error, "status_code", None)
+        return None
+
+
+def _error_fields(error):
+    # SDK exceptions preserve the requests exception as __context__, even when
+    # their public message is flattened. Never print that message or request URL.
+    allowed = {"CosClientError", "CosServiceError", "ReleaseError", "TimeoutError", "Timeout",
+               "ReadTimeout", "ConnectTimeout", "ReadTimeoutError", "ConnectTimeoutError",
+               "ConnectionError", "ProtocolError", "SSLError", "ProxyError", "InvalidHeader",
+               "OSError", "BrokenPipeError", "ConnectionResetError", "MaxRetryError"}
+    pending, seen, causes = [error], set(), []
+    while pending and len(seen) < 16:
+        item = pending.pop(0)
+        if not isinstance(item, BaseException) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        name = type(item).__name__
+        if name in allowed and name not in causes:
+            causes.append(name)
+        pending.extend([item.__cause__, item.__context__, *item.args])
+    status = _status(error)
+    if status is not None:
+        category = "http_error"
+    elif any("Timeout" in name for name in causes):
+        category = "timeout"
+    elif any(name in causes for name in ("ConnectionError", "ProtocolError", "SSLError", "ProxyError")):
+        category = "connection_error"
+    else:
+        category = "client_error"
+    return {"errorType": type(error).__name__ if type(error).__name__ in allowed else "Exception",
+            "httpStatus": status, "causes": causes, "category": category}
+
+
+def _transfer_event(operation, phase, key, **fields):
+    object_identity(key)
+    with _DIAGNOSTIC_LOCK:
+        print(json.dumps({"event": "cos_transfer", "operation": operation, "phase": phase,
+                          "key": key, **fields}, sort_keys=True), file=sys.stderr, flush=True)
+
+
+def make_cos_client(config, *, session=None, retry=UPLOAD_RETRIES):
+    """Observe real SDK stages before its thread pool discards part failures."""
+    from qcloud_cos import CosS3Client
+    # The pinned SDK logs str(error), which can contain signed URLs and response
+    # bodies. This dedicated release process emits only the structured events below.
+    logger = logging.getLogger("qcloud_cos")
+    logger.handlers = [logging.NullHandler()]
+    logger.propagate = False
+
+    class ReleaseCosClient(CosS3Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._failed_part = threading.Event()
+
+        def upload_file(self, *args, **kwargs):
+            self._failed_part.clear()
+            return super().upload_file(*args, **kwargs)
+
+        def _observed(self, operation, key, invoke, **fields):
+            started = time.monotonic()
+            _transfer_event(operation, "start", key, elapsedSeconds=0, **fields)
+            try:
+                response = invoke()
+            except Exception as error:
+                _transfer_event(operation, "failed", key, elapsedSeconds=round(time.monotonic() - started, 3), **fields, **_error_fields(error))
+                raise
+            _transfer_event(operation, "complete", key, elapsedSeconds=round(time.monotonic() - started, 3), **fields)
+            return response
+
+        def put_object(self, Bucket, Body, Key, EnableMD5=False, **kwargs):
+            call = super().put_object
+            return self._observed("put_object", Key, lambda: call(Bucket=Bucket, Body=Body, Key=Key, EnableMD5=EnableMD5, **kwargs))
+
+        def create_multipart_upload(self, Bucket, Key, **kwargs):
+            call = super().create_multipart_upload
+            return self._observed("create_multipart_upload", Key, lambda: call(Bucket=Bucket, Key=Key, **kwargs))
+
+        def upload_part(self, Bucket, Key, Body, PartNumber, UploadId, EnableMD5=False, **kwargs):
+            # Let the in-flight part finish, but do not spend another timeout on
+            # every queued part once the SDK has exhausted one part's retries.
+            if self._failed_part.is_set():
+                raise ReleaseError("remaining parts stopped after an earlier part failed")
+            call = super().upload_part
+            try:
+                return self._observed("upload_part", Key, lambda: call(Bucket=Bucket, Key=Key, Body=Body, PartNumber=PartNumber, UploadId=UploadId, EnableMD5=EnableMD5, **kwargs), part=PartNumber, bytes=len(Body))
+            except Exception:
+                self._failed_part.set()
+                raise
+
+        def complete_multipart_upload(self, Bucket, Key, UploadId, MultipartUpload=None, **kwargs):
+            call = super().complete_multipart_upload
+            # upload_file does not forward its kwargs to completion. Keep the
+            # non-overwrite guard explicit at the final write as well as initiation.
+            kwargs["Metadata"] = {**kwargs.get("Metadata", {}), "x-cos-forbid-overwrite": "true"}
+            return self._observed("complete_multipart_upload", Key, lambda: call(Bucket=Bucket, Key=Key, UploadId=UploadId, MultipartUpload=MultipartUpload or {}, **kwargs))
+
+    return ReleaseCosClient(config, retry=retry, session=session)
 
 
 def _upload_diagnostic(error, key, size, started):
@@ -62,7 +165,7 @@ class CosStore:
         if self.client is not None:
             return self.client
         try:
-            from qcloud_cos import CosConfig, CosS3Client
+            from qcloud_cos import CosConfig
         except ImportError:
             raise ReleaseError("install the pinned release COS dependency") from None
         prefix = {"reader": "READ", "upload": "UPLOAD", "marker": "UPLOAD", "retention": "RETENTION"}[self.role] + "_COS_"
@@ -73,10 +176,13 @@ class CosStore:
         require(secret_id and secret_key, "COS credentials are not configured for this role")
         endpoint = os.environ.get("COS_ENDPOINT")
         require(not endpoint or endpoint in {"cos.accelerate.myqcloud.com", f"cos.{self.region}.myqcloud.com"}, "unsupported COS endpoint")
-        config = dict(Region=self.region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme="https", Timeout=(10, 60))
+        # requests uses the connect timeout while sending the request body too.
+        # A 10-second value also limits request-body writes to ten seconds.
+        timeout = UPLOAD_TIMEOUT if self.role in {"upload", "marker"} else (10, 60)
+        config = dict(Region=self.region, SecretId=secret_id, SecretKey=secret_key, Token=token, Scheme="https", Timeout=timeout)
         if endpoint:
             config["Endpoint"] = endpoint
-        self.client = CosS3Client(CosConfig(**config))
+        self.client = make_cos_client(CosConfig(**config), retry=UPLOAD_RETRIES if self.role in {"upload", "marker"} else 3)
         return self.client
 
     def _mutating(self):
@@ -191,6 +297,7 @@ class CosStore:
             return {"status": "existing", "sha256": expected}
         self._mutating()
         started = time.monotonic()
+        _transfer_event("upload", "start", key, bytes=size, partSizeMiB=UPLOAD_PART_SIZE_MB, concurrency=UPLOAD_MAX_THREADS, retries=UPLOAD_RETRIES)
         try:
             metadata = {"x-cos-forbid-overwrite": "true", "x-cos-meta-sha256": expected}
             if factory is None:
@@ -198,7 +305,7 @@ class CosStore:
                 response = self._client().upload_file(
                     Bucket=self.bucket, Key=key, LocalFilePath=str(path),
                     PartSize=UPLOAD_PART_SIZE_MB, MAXThread=UPLOAD_MAX_THREADS,
-                    ACL="private", Metadata=metadata,
+                    ACL="private", Metadata=metadata, EnableMD5=True,
                 )
             else:
                 with factory() as stream:
@@ -213,7 +320,9 @@ class CosStore:
             if _status(error) not in {409, 412}:
                 detail = _upload_diagnostic(error, key, size, started)
                 raise ReleaseError(f"COS upload outcome is unknown ({detail}); inspect the immutable prefix before retrying") from None
+        _transfer_event("readback_sha256", "start", key, bytes=size)
         require(self.object_sha(key) == expected, "uploaded object readback checksum mismatch")
+        _transfer_event("upload", "verified", key, bytes=size, elapsedSeconds=round(time.monotonic() - started, 3))
         return {"status": "uploaded", "sha256": expected}
 
     def list(self, prefix=ROOT_PREFIX):

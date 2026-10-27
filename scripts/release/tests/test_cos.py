@@ -52,7 +52,7 @@ class FakeSDK:
         self.objects[Key] = Body.read()
         return {}
 
-    def upload_file(self, Bucket, Key, LocalFilePath, PartSize, MAXThread, ACL, Metadata):
+    def upload_file(self, Bucket, Key, LocalFilePath, PartSize, MAXThread, ACL, Metadata, EnableMD5=False):
         self.upload_files.append((Key, PartSize, MAXThread, ACL, Metadata))
         with open(LocalFilePath, "rb") as body:
             return self.put_object(Bucket, Key, body, ACL, Metadata, ContentLength=str(Path(LocalFilePath).stat().st_size))
@@ -88,7 +88,7 @@ class CosTests(unittest.TestCase):
             self.assertEqual(result["manifestSha256"], anchor)
             self.assertEqual(len(sdk.puts), 4)
             self.assertEqual(len(sdk.upload_files), 4)
-            self.assertTrue(all(part_size == 8 and threads == 4 for _, part_size, threads, _, _ in sdk.upload_files))
+            self.assertTrue(all(part_size == 2 and threads == 2 for _, part_size, threads, _, _ in sdk.upload_files))
             self.assertEqual(sdk.content_lengths, [str((directory / name).stat().st_size) for name in FILES])
             self.assertTrue(all(acl == "private" and metadata["x-cos-forbid-overwrite"] == "true" for _, acl, metadata in sdk.puts))
             upload_bundle(fake_store(sdk, "upload"), directory)

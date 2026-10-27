@@ -138,6 +138,17 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertNotIn("lint", package["scripts"])
         self.assertIn("next typegen", package["scripts"]["typecheck"])
 
+    def test_real_sdk_tests_are_installed_and_upload_only_skips_deployment(self) -> None:
+        for name in ("ci", "release"):
+            workflow = self.workflows[name]
+            self.assertIn("python3 -m pip install --disable-pip-version-check --no-input -r", workflow)
+            self.assertIn("scripts/release/requirements.txt", workflow)
+        release = self.workflows["release"]
+        self.assertRegex(release, r"upload_only:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false")
+        deployment = release.split("\n  deploy:", 1)[1]
+        self.assertIn("needs: [validate, package-upload]", deployment)
+        self.assertIn("if: github.event_name == 'release' || inputs.upload_only != true", deployment)
+
     def test_release_please_matches_standard_token_based_flow(self) -> None:
         workflow = self.workflows["release-please"]
         self.assertIn("github.ref == 'refs/heads/master'", workflow)
