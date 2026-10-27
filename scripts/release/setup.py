@@ -16,6 +16,8 @@ MULTIPART_ACTIONS = (
     "name/cos:CompleteMultipartUpload",
     "name/cos:AbortMultipartUpload",
 )
+MULTIPART_BUCKET_ACTIONS = ("name/cos:ListMultipartUploads",)
+MULTIPART_OBJECT_ACTIONS = tuple(action for action in MULTIPART_ACTIONS if action not in MULTIPART_BUCKET_ACTIONS)
 
 
 def policies(bucket: str, region: str) -> dict:
@@ -34,7 +36,9 @@ def policies(bucket: str, region: str) -> dict:
         statements.append({"effect": "allow", "action": ["name/cos:GetBucket"], "resource": [bucket_resource],
                            "condition": {"string_like": {"cos:prefix": ["qintopia-image%2Freleases%2F*"]}}})
         if role == "upload":
-            statements.append({"effect": "allow", "action": ["name/cos:PutObject", *MULTIPART_ACTIONS],
+            statements.append({"effect": "allow", "action": ["name/cos:ListMultipartUploads"], "resource": [bucket_resource],
+                               "condition": {"string_like": {"cos:prefix": ["qintopia-image%2Freleases%2F*"]}}})
+            statements.append({"effect": "allow", "action": ["name/cos:PutObject", *MULTIPART_OBJECT_ACTIONS],
                                "resource": [objects + "/" + name for name in FILES]})
         elif role == "retention":
             statements.append({"effect": "allow", "action": ["name/cos:DeleteObject"], "resource": [objects + "/" + name for name in FILES]})
