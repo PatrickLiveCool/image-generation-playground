@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.6...v0.3.0) (2026-10-27)
+
+
+### Features
+
+* **documents:** support PDF and Word context uploads ([#18](https://github.com/PatrickLiveCool/image-generation-playground/issues/18)) ([e26a24d](https://github.com/PatrickLiveCool/image-generation-playground/commit/e26a24dfd2cc6e832967da9ba4ed97f35121e7b1))
+
 ## [0.2.6](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.5...v0.2.6) (2026-10-27)
 
 
