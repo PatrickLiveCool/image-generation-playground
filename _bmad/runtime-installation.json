@@ -1,0 +1,16 @@
+{
+  "source": "https://registry.npmjs.org/bmad-method/-/bmad-method-6.12.0.tgz",
+  "version": "6.12.0",
+  "integrity": "sha512-gbbHo32TxCPwo4Yy70kqykFRwN5UdYqfnDKTsKAsF9m5qtLeoiCgEawj/LuzLBHLrYA0WTOyL/XWtXpgyDonMQ==",
+  "verifiedAt": "2026-10-29",
+  "scope": "Unmodified upstream runtime scripts and MIT license only; project config is local; skill templates remain installed separately.",
+  "requiresPython": ">=3.11",
+  "files": {
+    "config_utils.py": "48afe2bc18a29201e343cce3703be1e70df9c83ee74eeb68e57ef8ef42e8c651",
+    "memlog.py": "3b00f82ca33dc4227f715123b939514ee35c4f9c71150c894c3d8185df1b48df",
+    "render_skill.py": "8496d0d8b449d64c21b42a9aab3b13fc8a813a430c0695ffd84ad75bb1da7942",
+    "resolve_config.py": "70d7577396ed40ab9462ab75dce51f852bc2e094b2d1a054214f1b30c8789768",
+    "resolve_customization.py": "c95aab9f2dc500d6ab7db77d6a7860028701ce414e03690613a282cc3659d284"
+  },
+  "licenseSha256": "0aa79baf6328b4a1e694ce10a12ffc36d7666554da128dff0e8fcda0fc536a66"
+}

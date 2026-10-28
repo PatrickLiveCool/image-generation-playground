@@ -3,7 +3,7 @@ name: Image Playground PR format
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
-    branches: [master]
+    branches: [master, 'codex/**']
 
 permissions:
   contents: read
