@@ -17,7 +17,9 @@
     "db:bootstrap-admin": "node --import tsx scripts/database/bootstrap-admin.ts",
     "test:account-http": "node --import tsx --test tests/account-http-integration.test.mjs",
     "test:provider": "node --import tsx --test tests/provider-configuration-integration.test.ts",
-    "test:admission": "node --import tsx --test tests/generation-admission-integration.test.ts"
+    "test:admission": "node --import tsx --test tests/generation-admission-integration.test.ts",
+    "test:workspace": "node --import tsx --test tests/private-workspace-data-integration.test.ts",
+    "test:private-http": "node --import tsx --test tests/private-workspace-http-integration.test.mjs"
   },
   "dependencies": {
     "@ai-sdk/gateway": "latest",
@@ -87,6 +89,7 @@
     "react-hook-form": "latest",
     "react-resizable-panels": "^2.1.7",
     "recharts": "2.15.0",
+    "sharp": "0.34.5",
     "sonner": "^1.7.1",
     "swr": "latest",
     "tailwind-merge": "^2.5.5",

@@ -1,8 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // 保留 Node COS SDK 的独立模块边界，由 standalone 追踪并携带固定版本。
+  serverExternalPackages: ["cos-nodejs-sdk-v5"],
   async headers() {
-    return ["/", "/login", "/change-password", "/admin/:path*", "/api/account/:path*", "/api/admin/:path*", "/api/auth/:path*"].map(source => ({
+    return ["/", "/login", "/change-password", "/admin/:path*", "/api/account/:path*", "/api/admin/:path*", "/api/auth/:path*", "/api/creations/:path*", "/api/runs/:path*", "/api/images/:path*", "/api/documents/:path*", "/api/generate-image"].map(source => ({
       source,
       headers: [
         { key: "Cache-Control", value: "private, no-store" },
@@ -13,7 +15,7 @@ const nextConfig = {
   },
 
   cacheComponents: true,
-  // Capability-bearing image requests must not enter request logs or disk caches.
+  // 私有图片请求不得进入请求日志或磁盘缓存。
   logging: { incomingRequests: false },
   images: {
     unoptimized: true,

@@ -9,7 +9,7 @@ const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 export class ProviderError extends Error {
   status: number
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, public readonly code?: string) {
     super(message)
     this.name = "ProviderError"
     this.status = status

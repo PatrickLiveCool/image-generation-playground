@@ -179,3 +179,16 @@ export async function resolveGenerationProvider(headers: Headers, mappingId: str
   if (!mapping) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请重新选择。")
   return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: decryptProviderSecret(row.tokenCiphertext) }, mapping, revision: row.revision }
 }
+
+/** 在任务受理事务内固定配置；调用方必须已复核身份，且只对新请求调用。 */
+export async function resolveGenerationProviderInTransaction(client: PoolClient, mappingId: string, expectedRevision: number): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number }> {
+  if (typeof mappingId !== "string" || !mappingId || mappingId.length > 128) throw invalidInput("请重新选择模型。")
+  revision(expectedRevision)
+  // 与管理员更新行互斥，直到任务和配置快照一并提交；Token 仅返回给首次执行者。
+  const { rows: [row] } = await client.query<StoredConfiguration>(`SELECT ${columns} FROM app.provider_settings WHERE singleton=1 FOR SHARE`)
+  if (!row) throw new AccountError("PROVIDER_NOT_CONFIGURED", 503, "管理员尚未配置可用模型。")
+  assertRevision(expectedRevision, row)
+  const mapping = row.mappings.find(item => item.id === mappingId)
+  if (!mapping) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请重新选择。")
+  return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: decryptProviderSecret(row.tokenCiphertext) }, mapping, revision: row.revision }
+}
