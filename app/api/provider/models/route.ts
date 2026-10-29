@@ -1,8 +1,13 @@
+import { requireAccount, assertSameOrigin, accountErrorResponse } from "@/lib/auth/guards"
 import { NextResponse } from "next/server"
 import { ProviderError, publicFetch, validateProviderSettings } from "@/lib/provider-network"
 import { upstreamError } from "@/lib/relay-image"
 
 export async function POST(request: Request) {
+  try {
+    assertSameOrigin(request)
+    await requireAccount(request.headers, { admin: true })
+  } catch (error) { return accountErrorResponse(error) }
   try {
     const settings = validateProviderSettings(await request.json())
     const response = await publicFetch(`${settings.baseUrl}/models`, { headers: { Authorization: `Bearer ${settings.apiKey}` }, signal: AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]) })

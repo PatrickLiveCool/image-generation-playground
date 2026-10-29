@@ -309,10 +309,16 @@ export function migrateLegacyWorkspace(historyRaw: string | null, draftRaw: stri
 
 export class WorkspaceConflictError extends Error {}
 
-function openDatabase(): Promise<IDBDatabase> {
+/** A new account never imports the anonymous demo or another account's drafts. */
+export function accountStorageKey(base: string, accountId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) throw new Error("账号标识无效，无法恢复草稿。")
+  return `${base}:account:${accountId}`
+}
+
+function openDatabase(accountId: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") { reject(new Error("浏览器不支持创作保存。")); return }
-    const request = indexedDB.open(DATABASE, 1)
+    const request = indexedDB.open(accountStorageKey(DATABASE, accountId), 1)
     let rejected = false
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE)
@@ -327,8 +333,8 @@ function openDatabase(): Promise<IDBDatabase> {
   })
 }
 
-export async function readWorkspace(): Promise<unknown> {
-  const database = await openDatabase()
+export async function readWorkspace(accountId: string): Promise<unknown> {
+  const database = await openDatabase(accountId)
   try {
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE, "readonly")
@@ -341,8 +347,8 @@ export async function readWorkspace(): Promise<unknown> {
 }
 
 /** Atomic revision check prevents another open tab from silently overwriting this one's work. */
-export async function writeWorkspace(workspace: CreativeWorkspace, expectedRevision: number, writeId = crypto.randomUUID()): Promise<number> {
-  const database = await openDatabase()
+export async function writeWorkspace(workspace: CreativeWorkspace, expectedRevision: number, writeId: string, accountId: string): Promise<number> {
+  const database = await openDatabase(accountId)
   try {
     return await new Promise<number>((resolve, reject) => {
       const transaction = database.transaction(STORE, "readwrite")

@@ -5,11 +5,19 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { XIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { useAccountVisible } from '@/components/account/account-visibility'
 
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const visible = useAccountVisible()
+  const [internalOpen, setInternalOpen] = React.useState(props.defaultOpen ?? false)
+  const open = props.open ?? internalOpen
+  return <DialogPrimitive.Root data-slot="dialog" {...props} open={visible && open} onOpenChange={next => {
+    if (!visible) return
+    setInternalOpen(next)
+    props.onOpenChange?.(next)
+  }} />
 }
 
 function DialogTrigger({
@@ -54,6 +62,10 @@ function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
+  const visible = useAccountVisible()
+  // Portals live outside the hidden account wrapper. Remove their visible DOM
+  // immediately, retaining the caller's draft and controlled open state.
+  if (!visible) return null
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />

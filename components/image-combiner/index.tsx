@@ -40,9 +40,9 @@ function useFilePreview(file: File | null) {
   return preview
 }
 
-export function ImageCombiner(): ReactElement {
-  const api = useApiSettings()
-  const workspace = useCreativeWorkspace()
+export function ImageCombiner({ accountId }: { accountId: string }): ReactElement {
+  const api = useApiSettings(accountId)
+  const workspace = useCreativeWorkspace(accountId)
   const [showApiSettings, setShowApiSettings] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -133,7 +133,7 @@ export function ImageCombiner(): ReactElement {
   const activeCreationId = workspace.activeCreation?.id
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden bg-black font-sans text-white">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-black font-sans text-white">
       <div className="pointer-events-none fixed inset-0 opacity-25"><MemoizedDithering colorBack="#00000000" colorFront="#FFFFFF" speed={0.43} shape="wave" type="4x4" pxSize={3} scale={0.6} style={{ backgroundColor: "#000000", height: "100vh", width: "100vw" }} /></div>
       {toast && <ToastNotification message={toast.message} type={toast.type} />}
       <main className="relative z-10 flex min-h-0 w-full flex-1 flex-col p-2 md:p-4 lg:p-6">

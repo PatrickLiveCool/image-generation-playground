@@ -1,6 +1,16 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  async headers() {
+    return ["/", "/login", "/change-password", "/admin/:path*", "/api/account/:path*", "/api/admin/:path*", "/api/auth/:path*"].map(source => ({
+      source,
+      headers: [
+        { key: "Cache-Control", value: "private, no-store" },
+        { key: "Referrer-Policy", value: "same-origin" },
+        { key: "X-Robots-Tag", value: "noindex, nofollow" },
+      ],
+    }))
+  },
 
   cacheComponents: true,
   // Capability-bearing image requests must not enter request logs or disk caches.
