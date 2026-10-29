@@ -74,45 +74,19 @@ test("CDN signing uses configured domain and a decimal Type D timestamp", () => 
   assert.equal(url.searchParams.get("sign"), createHash("md5").update(`${config.cdnAuthKey}/${key}1700000000`).digest("hex"))
 })
 
-test("asset route validates capability before COS access and serves private bytes on the app domain", async context => {
-  context.mock.method(assets, "readCosConfig", () => config)
+test("retired anonymous asset links never open COS or expose bytes, even with a valid capability", async context => {
   let stores = 0
-  let reads = 0
-  context.mock.method(assets, "createCosStore", () => {
-    stores++
-    return { async getImage(objectKey: string) { reads++; assert.equal(objectKey, key); return image } }
-  })
-  const stable = assets.stableAssetUrl(key, config)
-  const bad = await GET(new Request("https://app.example/api/assets/test?access=bad"), {params:Promise.resolve({key:key.split("/")})})
-  assert.equal(bad.status, 403)
-  const manifestKey = key.replace("outputs/final.png", "manifest.json")
-  const manifest = await GET(new Request(`https://app.example${stable}`), {params:Promise.resolve({key:manifestKey.split("/")})})
-  assert.equal(manifest.status, 403)
+  context.mock.method(assets, "createCosStore", () => { stores++; throw new Error("must not read COS") })
+  for (const source of ["/api/assets/test?access=bad", assets.stableAssetUrl(key, config)]) {
+    const response = await GET(new Request(`https://app.example${source}`), {params:Promise.resolve({key:key.split("/")})})
+    assert.equal(response.status, 410)
+    assert.equal(response.headers.get("cache-control"), "private, no-store")
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer")
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff")
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow")
+    assert.equal(response.headers.has("location"), false)
+  }
   assert.equal(stores, 0)
-  assert.equal(reads, 0)
-
-  const good = await GET(new Request(`https://app.example${stable}`), {params:Promise.resolve({key:key.split("/")})})
-  assert.equal(good.status, 200)
-  assert.equal(good.headers.has("location"), false)
-  assert.equal(good.headers.get("content-type"), "image/png")
-  assert.equal(good.headers.get("content-length"), String(png.length))
-  assert.equal(good.headers.get("cache-control"), "private, no-store")
-  assert.equal(good.headers.get("referrer-policy"), "no-referrer")
-  assert.equal(good.headers.get("x-content-type-options"), "nosniff")
-  assert.equal(good.headers.get("x-robots-tag"), "noindex, nofollow")
-  assert.deepEqual(Buffer.from(await good.arrayBuffer()), png)
-  assert.equal(stores, 1)
-  assert.equal(reads, 1)
-})
-
-test("asset read errors do not leak storage errors or capability credentials", async context => {
-  context.mock.method(assets, "readCosConfig", () => config)
-  context.mock.method(assets, "createCosStore", () => ({ async getImage() { throw new Error("test-cos-secret should never leak") } }))
-  const stable = assets.stableAssetUrl(key, config)
-  const response = await GET(new Request(`https://app.example${stable}`), {params:Promise.resolve({key:key.split("/")})})
-  assert.equal(response.status, 503)
-  assert.equal(response.headers.get("cache-control"), "private, no-store")
-  assert.equal((await response.text()).includes(config.secretKey), false)
 })
 
 test("COS adapter sends memory buffers with private ACL, never local file paths", async () => {

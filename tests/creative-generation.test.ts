@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert"
 import { test, after } from "node:test"
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
@@ -15,13 +15,19 @@ for (const name of ["provider-network", "relay-image", "document-context", "cos-
 }
 writeFileSync(path.join(dir, "cos-sdk-stub.js"), 'module.exports = class { constructor() { throw new Error("No live COS access in contract tests") } }')
 writeFileSync(path.join(dir, "next-stub.js"), 'exports.NextResponse = { json: (body, init) => Response.json(body, init) }')
-const route = readFileSync(new URL("../app/api/generate-image/route.ts", import.meta.url), "utf8")
+mkdirSync(path.join(dir, "auth"))
+writeFileSync(path.join(dir, "auth/guards.js"), 'exports.assertSameOrigin = () => {}; exports.requireAccount = async () => ({id:"synthetic-owner"}); exports.accountErrorResponse = () => Response.json({error:"请重新登录"},{status:401})')
+const route = readFileSync(new URL("../lib/legacy-generation.ts", import.meta.url), "utf8")
+const protectedRoute = readFileSync(new URL("../app/api/generate-image/route.ts", import.meta.url), "utf8")
+writeFileSync(path.join(dir, "protected-route.js"), compile(protectedRoute).replaceAll('require("@/lib/', 'require("./'))
 writeFileSync(path.join(dir, "generate-route.js"), compile(route).replaceAll('require("@/lib/', 'require("./').replace('require("next/server")', 'require("./next-stub")'))
 const require = createRequire(import.meta.url)
 const assets = require(path.join(dir, "cos-assets.js"))
 const relay = require(path.join(dir, "relay-image.js"))
 const network = require(path.join(dir, "provider-network.js"))
-const { POST } = require(path.join(dir, "generate-route.js"))
+const auth = require(path.join(dir, "auth/guards.js"))
+const { generateLegacyRequest: POST } = require(path.join(dir, "generate-route.js"))
+const { POST: protectedPOST } = require(path.join(dir, "protected-route.js"))
 after(() => rmSync(dir, { recursive: true, force: true }))
 
 const config = { bucket:"test-1234567890", region:"ap-shanghai", secretId:"test-id", secretKey:"cos-secret-test", domain:"https://images.example", cdnAuthKey:"cdn-secret-test-1234", assetAccessSecret:"object-capability-secret-test-1234567890" }
@@ -176,4 +182,22 @@ test("first creation version is valid without a parent while legacy HTTPS bases 
   assert.equal((await POST(request(legacy))).status,200)
   assert.equal(reads,1)
   assert.equal(store.reads.length,0)
+})
+
+test("generation authorization fails before parsing input or contacting storage/provider", async context => {
+  context.mock.method(auth, "requireAccount", async () => { throw new Error("synthetic denied account") })
+  let stores = 0
+  context.mock.method(assets, "createCosStore", () => { stores++; throw new Error("must not access") })
+  const response = await protectedPOST(new Request("https://app.example/api/generate-image", { method: "POST", body: "invalid-form" }))
+  assert.equal(response.status, 401)
+  assert.equal(stores, 0)
+})
+
+test("account checkpoint refuses generation before any billable work while private asset output is unavailable", async context => {
+  let stores = 0
+  context.mock.method(assets, "createCosStore", () => { stores++; throw new Error("must not access") })
+  const response = await protectedPOST(new Request("https://app.example/api/generate-image", { method: "POST", body: "invalid-form" }))
+  assert.equal(response.status, 503)
+  assert.equal((await response.json()).error.code, "PRIVATE_WORKSPACE_PENDING")
+  assert.equal(stores, 0)
 })

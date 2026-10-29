@@ -35,7 +35,8 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
     async (generatedImage: GeneratedImage | null) => {
       if (!generatedImage) return
       try {
-        const response = await fetch(generatedImage.url)
+        const response = await fetch(generatedImage.url, { cache: "no-store" })
+        if (!response.ok) throw new Error("图片访问失败，请重新登录后重试。")
         const blob = await response.blob()
         const url = window.URL.createObjectURL(blob)
         const link = document.createElement("a")
@@ -46,11 +47,10 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
         document.body.removeChild(link)
         window.URL.revokeObjectURL(url)
       } catch (error) {
-        console.error("Error downloading image:", error)
-        window.open(generatedImage.url, "_blank")
+        onToast(error instanceof Error ? error.message : "图片下载失败，请稍后重试。", "error")
       }
     },
-    [currentMode],
+    [currentMode, onToast],
   )
 
   const openImageInNewTab = useCallback((generatedImage: GeneratedImage | null) => {
@@ -133,18 +133,17 @@ export function useImageActions({ isMobile, currentMode, onToast }: UseImageActi
             return
           } catch (clipboardError) {
             try {
-              const response = await fetch(generatedImage.url)
+              const response = await fetch(generatedImage.url, { cache: "no-store" })
+        if (!response.ok) throw new Error("图片访问失败，请重新登录后重试。")
               const blob = await response.blob()
-              const reader = new FileReader()
-              reader.onloadend = async () => {
-                try {
-                  await navigator.clipboard.writeText(reader.result as string)
-                  onToast("图片数据已复制，可粘贴到兼容的应用中。", "success")
-                } catch (err) {
-                  throw new Error("Clipboard not supported")
-                }
-              }
-              reader.readAsDataURL(blob)
+              const data = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve(String(reader.result))
+                reader.onerror = () => reject(new Error("读取图片失败"))
+                reader.readAsDataURL(blob)
+              })
+              await navigator.clipboard.writeText(data)
+              onToast("图片数据已复制，可粘贴到兼容的应用中。", "success")
               return
             } catch (fallbackError) {
               onToast("当前环境不支持复制，请使用下载按钮。", "error")

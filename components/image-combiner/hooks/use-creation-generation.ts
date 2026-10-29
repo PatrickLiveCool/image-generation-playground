@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react"
 import type { ModelMapping, ProviderSettings } from "@/lib/api-provider-types"
+import { ACCOUNT_SESSION_RECHECK_EVENT } from "@/lib/account-client"
 import { buildCreationRequest } from "@/lib/creation-request"
 import type { CreativeWorkspaceController } from "./use-creative-workspace"
 
@@ -67,7 +68,13 @@ export function useCreationGeneration(
     try {
       const response = await fetch("/api/generate-image", { method: "POST", body: formData, signal: controller.signal })
       const result = await response.json().catch(() => null)
-      if (!response.ok) throw new Error(typeof result?.error === "string" ? result.error : "生成未完成，请稍后重试。")
+      if (!response.ok) {
+        if (response.status === 401 || result?.error?.code === "PASSWORD_CHANGE_REQUIRED") {
+          window.dispatchEvent(new Event(ACCOUNT_SESSION_RECHECK_EVENT))
+        }
+        throw new Error(typeof result?.error === "string" ? result.error
+          : typeof result?.error?.message === "string" ? result.error.message : "生成未完成，请稍后重试。")
+      }
       if (typeof result?.url !== "string" || !result.url) throw new Error("接口没有返回图片，请检查中转的图片接口设置。")
       if (controller.signal.aborted) return
       // Completion is independent of the visible <img> decoding the result.
