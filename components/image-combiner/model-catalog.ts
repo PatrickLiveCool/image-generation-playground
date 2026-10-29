@@ -64,7 +64,7 @@ const ASPECT_RATIO_SUPPORT: Record<string, readonly string[]> = {
 
 /** App aspect-ratio values supported by a model (full set if unrestricted). */
 export function aspectRatiosForModel(modelId: string): readonly string[] {
-  return ASPECT_RATIO_SUPPORT[modelId] ?? ALL_ASPECT_RATIO_VALUES
+  return Object.hasOwn(ASPECT_RATIO_SUPPORT, modelId) ? ASPECT_RATIO_SUPPORT[modelId] : ALL_ASPECT_RATIO_VALUES
 }
 
 export const PROVIDERS = [

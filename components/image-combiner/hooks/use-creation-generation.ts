@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef } from "react"
-import type { ModelMapping, ProviderSettings } from "@/lib/api-provider-types"
+import type { PublicModelCatalog } from "@/lib/provider-configuration-types"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "@/lib/account-client"
 import { buildCreationRequest } from "@/lib/creation-request"
 import type { CreativeWorkspaceController } from "./use-creative-workspace"
@@ -15,8 +15,7 @@ interface RunningRequest {
 /** Owned by the workspace, so changing the visible creation cannot cancel or redirect a request. */
 export function useCreationGeneration(
   workspace: CreativeWorkspaceController,
-  settings: ProviderSettings,
-  mappings: ModelMapping[],
+  catalog: PublicModelCatalog,
   onToast: (message: string, type?: "success" | "error") => void,
 ) {
   const requests = useRef(new Map<string, RunningRequest>())
@@ -47,7 +46,7 @@ export function useCreationGeneration(
 
     let prepared: ReturnType<typeof buildCreationRequest>
     try {
-      prepared = buildCreationRequest({ creation, settings, mappings })
+      prepared = buildCreationRequest({ creation, catalog })
     } catch (error) {
       onToast(error instanceof Error ? error.message : "请检查本轮输入。", "error")
       return
@@ -89,7 +88,7 @@ export function useCreationGeneration(
       clearInterval(timer)
       if (requests.current.get(creationId)?.id === generation.id) requests.current.delete(creationId)
     }
-  }, [settings, mappings, getCreation, startGeneration, updateGeneration, completeGeneration, failGeneration, onToast])
+  }, [catalog, getCreation, startGeneration, updateGeneration, completeGeneration, failGeneration, onToast])
 
   const cancel = useCallback((creationId: string, generationId: string) => {
     const request = requests.current.get(creationId)

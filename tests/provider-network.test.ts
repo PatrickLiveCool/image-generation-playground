@@ -97,3 +97,24 @@ test("refuses a DNS result containing both public and private addresses", async 
     syncBuiltinESMExports()
   }
 })
+
+test("model-list response limit stops streaming before the image-sized ceiling", async (context) => {
+  context.mock.method(dns, "lookup", async () => [{ address: "8.8.8.8", family: 4 }])
+  let response: PassThrough
+  let chunksSent = 0
+  context.mock.method(https, "request", ((_options: https.RequestOptions, callback: (response: unknown) => void) => ({
+    on() { return this }, end() {
+      response = Object.assign(new PassThrough(), { statusCode: 200, headers: {} })
+      callback(response)
+      for (let i = 0; i < 16 && !response.destroyed; i++) { chunksSent++; response.write(Buffer.alloc(512 * 1024)) }
+      if (!response.destroyed) response.end()
+    },
+  })) as unknown as typeof https.request)
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(publicFetch("https://relay.example/models", {}, 2 * 1024 * 1024), ProviderError)
+    assert.equal(response!.destroyed, true)
+    assert.equal(chunksSent, 5)
+    await assert.rejects(publicFetch("https://relay.example/models", {}, 33 * 1024 * 1024), ProviderError)
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports() }
+})

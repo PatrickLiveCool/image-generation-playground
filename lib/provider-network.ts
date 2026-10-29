@@ -117,7 +117,10 @@ async function resolvePublicHost(hostname: string, signal: AbortSignal) {
 }
 
 /** Bounded HTTPS request pinned to a checked public IP; redirects are rejected. */
-export async function publicFetch(urlString: string, init: RequestInit = {}): Promise<Response> {
+export async function publicFetch(urlString: string, init: RequestInit = {}, maxResponseBytes = MAX_RESPONSE_BYTES): Promise<Response> {
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1 || maxResponseBytes > MAX_RESPONSE_BYTES) {
+    throw new ProviderError("响应大小限制无效。")
+  }
   const url = parsePublicHttpsUrl(urlString)
   const signal = AbortSignal.any([AbortSignal.timeout(180_000), ...(init.signal ? [init.signal] : [])])
   try {
@@ -167,9 +170,9 @@ export async function publicFetch(urlString: string, init: RequestInit = {}): Pr
         let size = 0
         response.on("data", (chunk: Buffer) => {
           size += chunk.length
-          if (size > MAX_RESPONSE_BYTES) {
+          if (size > maxResponseBytes) {
             response.destroy()
-            reject(new ProviderError("API 返回内容超过 32 MB，请降低图片大小后重试。", 502))
+            reject(new ProviderError("API 返回内容超过允许的大小，请减少内容后重试。", 502))
             return
           }
           chunks.push(chunk)

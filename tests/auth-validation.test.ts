@@ -115,3 +115,16 @@ test("取消请求会终止等待JSON正文", async () => {
   await rejected
   assert.equal(cancelled, true)
 })
+
+test("模型配置的合法较大JSON不因单字节分块而被旧正文限额拒绝", async () => {
+  const expected = { data: "x".repeat(17_000) }
+  const bytes = new TextEncoder().encode(JSON.stringify(expected))
+  let offset = 0
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset === bytes.length) controller.close()
+      else controller.enqueue(bytes.subarray(offset, ++offset))
+    },
+  })
+  assert.deepEqual(await readJson(jsonStream(stream), 2 * 1024 * 1024), expected)
+})
