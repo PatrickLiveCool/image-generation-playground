@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { hashPassword, verifyPassword } from "better-auth/crypto"
 import type { PoolClient } from "pg"
 import type { AccountUser, AdminAccountUser } from "../account-types"
@@ -7,28 +7,9 @@ import { AccountError, invalidInput } from "./errors"
 import { accountIdentity, recheckAccount, safeUser, type AccountIdentity } from "./guards"
 import { normalizeUsername, validateName, validatePassword } from "./validation"
 import { consumeAccountRateLimit } from "./rate-limit"
-
-// One project-specific transaction lock serializes all administrator mutations,
-// including initialization and last-administrator checks. User rows also lock
-// every credential/session mutation against concurrent login/password changes.
-const ADMIN_LOCK = 1_909_961_701
-export async function lockAdministration(client: PoolClient) {
-  await client.query("SELECT pg_advisory_xact_lock($1)", [ADMIN_LOCK])
-}
-
-async function audit(client: PoolClient, actor: string, subject: string, action: string) {
-  await client.query('INSERT INTO app.account_audit ("actorId","subjectId",action) VALUES ($1,$2,$3)', [actor, subject, action])
-}
-
-async function insertAccount(client: PoolClient, username: string, name: string, role: "admin" | "user", passwordHash: string, expiresAt: Date | null) {
-  const id = randomUUID()
-  const { rows: [user] } = await client.query<AdminAccountUser>(
-    'INSERT INTO app."user" (id,name,email,"emailVerified",username,"displayUsername",role,"mustChangePassword","temporaryPasswordExpiresAt") VALUES ($1,$2,$3,true,$4,$4,$5,$6,$7) RETURNING id,username,name,role,banned,"mustChangePassword","createdAt"',
-    [id, name, `${id}@accounts.invalid`, username, role, Boolean(expiresAt), expiresAt],
-  )
-  await client.query('INSERT INTO app.account (id,"accountId","providerId","userId",password) VALUES ($1,$2,$3,$2,$4)', [randomUUID(), id, "credential", passwordHash])
-  return user
-}
+import { audit, insertAccount, lockAdministration } from "./account-writes"
+import { initializeAdministrator } from "./bootstrap-administrator"
+export { lockAdministration } from "./account-writes"
 
 function isUniqueViolation(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505"
@@ -39,17 +20,7 @@ function temporaryCredential() {
 }
 
 export async function bootstrapAdministrator(input: { username: unknown; name: unknown; password: unknown }) {
-  const username = normalizeUsername(input.username)
-  const name = validateName(input.name)
-  const passwordHash = await hashPassword(validatePassword(input.password))
-  return withTransaction(async (client) => {
-    await lockAdministration(client)
-    const { rowCount } = await client.query('SELECT id FROM app."user" WHERE role=$1 LIMIT 1', ["admin"])
-    if (rowCount) throw new AccountError("ADMIN_EXISTS", 409, "管理员已初始化，拒绝覆盖已有账号。")
-    const user = await insertAccount(client, username, name, "admin", passwordHash, null)
-    await audit(client, user.id, user.id, "bootstrap-admin")
-    return safeUser(user)
-  })
+  return safeUser(await initializeAdministrator(input, withTransaction))
 }
 
 export async function createAccount(headers: Headers, input: Record<string, unknown>) {

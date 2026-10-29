@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "scripts": {
-    "build": "next build",
+    "build": "next build && node scripts/database/build-maintenance.mjs",
     "dev": "next dev",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit --incremental false",
@@ -19,7 +19,8 @@
     "test:provider": "node --import tsx --test tests/provider-configuration-integration.test.ts",
     "test:admission": "node --import tsx --test tests/generation-admission-integration.test.ts",
     "test:workspace": "node --import tsx --test tests/private-workspace-data-integration.test.ts",
-    "test:private-http": "node --import tsx --test tests/private-workspace-http-integration.test.mjs"
+    "test:private-http": "node --import tsx --test tests/private-workspace-http-integration.test.mjs",
+    "test:backup": "node --import tsx --test tests/project-backup-integration.test.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "latest",
@@ -109,6 +110,7 @@
     "@types/pg": "8.15.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "0.27.7",
     "fake-indexeddb": "6.2.6",
     "happy-dom": "21.0.4",
     "postcss": "^8.5",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,55 @@ import urllib.request
 
 from common import ARCHIVE, ReleaseError, require, safe_extract_runtime, sha256_file, validate_bundle
 from package import git, package_bundle
+
+
+def verify_maintenance_runtime(runtime, manifest, source=None):
+    """Exercise the shipped entrypoint, never tsx or repository imports."""
+    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "NODE_ENV": "production"}
+    def execute(command, values):
+        try:
+            result = subprocess.run(["node", "maintenance/cli.mjs", command], cwd=runtime, env=values,
+                                    capture_output=True, text=True, timeout=30)
+            require(result.returncode == 0 and len(result.stdout) <= 64 * 1024, "packaged database maintenance command failed: " + command)
+            value = json.loads(result.stdout)
+            require(isinstance(value, dict), "packaged maintenance returned an invalid result")
+            return value
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            raise ReleaseError("packaged database maintenance command failed: " + command) from None
+    descriptor = execute("describe", environment)
+    budget = {"applicationProcesses": 2, "perApplication": 4, "maintenance": 1, "total": 9}
+    require(descriptor.get("application") == "qintopia-image" and descriptor.get("protocol") == "account-private-v1"
+            and descriptor.get("database") == manifest["database"] and descriptor.get("connectionBudget") == budget,
+            "packaged database maintenance contract differs from manifest")
+    require(isinstance(descriptor.get("commands"), list) and all(isinstance(command, str) for command in descriptor["commands"])
+            and {"describe", "preflight", "migrate", "verify"} <= set(descriptor["commands"]), "packaged maintenance commands are incomplete")
+    if os.environ.get("IMAGE_RELEASE_DATABASE_SMOKE") != "1":
+        return "not-requested"
+    environment.update({
+        "IMAGE_DATABASE_TARGET": "local",
+        "IMAGE_DATABASE_URL": "postgresql://qintopia_image_app:synthetic-local-runtime-only@127.0.0.1:32768/qintopia_image",
+        "IMAGE_MIGRATION_DATABASE_URL": "postgresql://qintopia_image_migrator:synthetic-local-migrator-only@127.0.0.1:32768/qintopia_image",
+        "BETTER_AUTH_URL": "https://acceptance.image.test", "BETTER_AUTH_SECRET": "synthetic-private-http-auth-secret-20261029-only",
+        "PROVIDER_CONFIG_KEY": base64.b64encode(bytes([61]) * 32).decode(),
+    })
+    expected = [{"version": item["name"][:4], **item} for item in manifest["database"]["migrations"]]
+    for command in ("preflight", "verify"):
+        status = execute(command, environment)
+        require(status.get("command") == command and status.get("application") == "qintopia-image"
+                and status.get("release") == {"version": manifest["version"], "revision": manifest["revision"]}
+                and status.get("target") == "local" and status.get("database") == "qintopia_image" and status.get("schema") == "app"
+                and status.get("ledger") == expected and status.get("pending") == [] and status.get("compatible") is True
+                and status.get("secretsVerified") is True and status.get("connectionBudget") == budget,
+                "packaged maintenance did not verify the isolated local fixture")
+    # 串行复用专用合成夹具：应用测试驱动真实解包CLI与FD3/FD4，不能只测源码入口。
+    if source is not None:
+        fixture_environment = {"PATH": environment["PATH"], "LANG": "C.UTF-8", "NODE_ENV": "test",
+                               "IMAGE_BACKUP_TEST_DATABASE_URL": environment["IMAGE_DATABASE_URL"],
+                               "IMAGE_BACKUP_BUNDLED_CLI": str(runtime / "maintenance/cli.mjs")}
+        result = subprocess.run(["node", "--import", "tsx", "--test", "tests/project-backup-integration.test.ts"],
+                                cwd=source, env=fixture_environment, capture_output=True, text=True, timeout=120)
+        require(result.returncode == 0, "packaged bootstrap/recovery fixture failed: " + result.stdout[-8000:] + result.stderr[-2000:])
+    return "passed"
 
 
 def smoke(source_root):
@@ -32,10 +82,11 @@ def smoke(source_root):
         manifest = validate_bundle(bundle, anchor, version, revision)
         runtime = root / "runtime"
         safe_extract_runtime(bundle / ARCHIVE, runtime, manifest)
+        database_smoke = verify_maintenance_runtime(runtime, manifest, source)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        environment = {**os.environ, "NODE_ENV": "production", "HOSTNAME": "127.0.0.1", "PORT": str(port),
+        environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "NODE_ENV": "production", "HOSTNAME": "127.0.0.1", "PORT": str(port),
                        "NEXT_TELEMETRY_DISABLED": "1", "APP_RELEASE": "untrusted-environment-label",
                        "COS_BUCKET": "image-release-smoke-1234567890", "COS_REGION": "ap-shanghai",
                        "COS_SECRET_ID": "synthetic-smoke-id", "COS_SECRET_KEY": "synthetic-smoke-key",
@@ -86,7 +137,8 @@ def smoke(source_root):
             status, _ = request("/api/version")
             require(status == 503, "production accepted missing release metadata")
             print(json.dumps({"standaloneSmoke": "passed", "version": version, "revision": revision,
-                              "platform": "linux/amd64", "cloudCalls": 0, "modelCalls": 0}))
+                              "platform": "linux/amd64", "maintenanceDescribe": "passed", "databaseReadOnlySmoke": database_smoke,
+                              "cloudCalls": 0, "modelCalls": 0}))
         finally:
             process.terminate()
             try:

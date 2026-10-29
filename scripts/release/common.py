@@ -19,6 +19,10 @@ REVISION = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 METADATA_FIELDS = {"schema", "application", "version", "revision", "platform", "builtAt", "browserWorkspaceSchema", "assetCapabilityVersion"}
 MANIFEST_FIELDS = METADATA_FIELDS | {"databaseMode", "rollbackCompatibility", "archiveSha256", "sbomSha256", "releasePolicySha256"}
+ACCOUNT_METADATA_FIELDS = METADATA_FIELDS | {"databaseMode", "assetAccessProtocol", "database"}
+ACCOUNT_MANIFEST_FIELDS = MANIFEST_FIELDS | {"assetAccessProtocol", "database"}
+POLICY_FIELDS = {"application", "version", "databaseMode", "browserWorkspaceSchema", "assetCapabilityVersion", "rollbackCompatibility"}
+MIGRATION_NAME = re.compile(r"([0-9]{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.sql\Z")
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 100_000
 MAX_LINK_HOPS = 40
@@ -60,11 +64,43 @@ def release_prefix(version, revision):
     return f"{ROOT_PREFIX}{version}/{revision}/"
 
 
+def metadata_fields(schema):
+    require(type(schema) is int and schema in {1, 2}, "unsupported manifest schema")
+    return ACCOUNT_METADATA_FIELDS if schema == 2 else METADATA_FIELDS
+
+
+def is_account_release(value):
+    """Use only after validate_manifest/validate_metadata has established its shape."""
+    return isinstance(value, dict) and value.get("schema") == 2 and value.get("databaseMode") == "postgresql" and value.get("assetAccessProtocol") == "account-private-v1"
+
+
+def validate_database_contract(value):
+    require(isinstance(value, dict) and set(value) == {"name", "schema", "minVersion", "maxVersion", "migrations"}, "invalid database contract fields")
+    require(value["name"] == "qintopia_image" and value["schema"] == "app", "database contract belongs to another project")
+    for field in ("minVersion", "maxVersion"):
+        require(isinstance(value[field], str) and re.fullmatch(r"[0-9]{4}", value[field]) and value[field] != "0000", "invalid database compatibility version")
+    migrations = value["migrations"]
+    require(isinstance(migrations, list) and 1 <= len(migrations) <= 128, "invalid database migration set")
+    versions = []
+    for index, migration in enumerate(migrations, 1):
+        require(isinstance(migration, dict) and set(migration) == {"name", "sha256"}, "invalid migration fields")
+        match = MIGRATION_NAME.fullmatch(migration.get("name", "")) if isinstance(migration.get("name"), str) else None
+        require(match and match[1] == f"{index:04d}", "migration set must be ordered, complete and unique")
+        require(isinstance(migration["sha256"], str) and SHA256.fullmatch(migration["sha256"]), "invalid migration digest")
+        versions.append(match[1])
+    require(value["minVersion"] in versions and value["minVersion"] <= value["maxVersion"] == versions[-1], "database compatibility range differs from migration set")
+    return value
+
+
 def validate_policy(value, version):
     require(isinstance(value, dict), "release policy must be an object")
-    require(set(value) == {"application", "version", "databaseMode", "browserWorkspaceSchema", "assetCapabilityVersion", "rollbackCompatibility"}, "unexpected release policy fields")
+    account = value.get("databaseMode") == "postgresql"
+    require(set(value) == POLICY_FIELDS | ({"assetAccessProtocol", "database"} if account else set()), "unexpected release policy fields")
     require(value["application"] == APPLICATION and value["version"] == version.removeprefix("v"), "release policy identity mismatch")
-    require(value["databaseMode"] == "none", "this application has no database migration adapter")
+    require(value["databaseMode"] in {"none", "postgresql"}, "unsupported database migration adapter")
+    if account:
+        require(value["assetAccessProtocol"] == "account-private-v1", "unsupported private asset protocol")
+        validate_database_contract(value["database"])
     require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] == 1, "unsupported browser workspace schema")
     require(type(value["assetCapabilityVersion"]) is int and value["assetCapabilityVersion"] == 1, "unsupported asset capability version")
     compatibility = value["rollbackCompatibility"]
@@ -74,21 +110,37 @@ def validate_policy(value, version):
     return value
 
 
-def validate_manifest(value, version=None, revision=None):
-    require(isinstance(value, dict) and set(value) == MANIFEST_FIELDS, "invalid manifest fields")
-    require(type(value["schema"]) is int and value["schema"] == 1, "unsupported manifest schema")
+def validate_metadata(value):
+    require(isinstance(value, dict) and set(value) == metadata_fields(value.get("schema")), "invalid runtime release metadata")
     require(value["application"] == APPLICATION and value["platform"] == "linux/amd64", "manifest application or platform mismatch")
-    actual_version, actual_revision = validate_identity(value["version"], value["revision"])
-    require(version is None or version == actual_version, "manifest version mismatch")
-    require(revision is None or revision == actual_revision, "manifest revision mismatch")
+    validate_identity(value["version"], value["revision"])
     try:
+        require(isinstance(value["builtAt"], str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)", value["builtAt"]), "invalid build timestamp")
         stamp = datetime.fromisoformat(value["builtAt"].replace("Z", "+00:00"))
         require(stamp.tzinfo is not None and stamp.utcoffset().total_seconds() == 0, "build timestamp must be UTC")
     except (ValueError, TypeError, AttributeError):
         raise ReleaseError("invalid build timestamp") from None
+    require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] == 1, "unsupported browser workspace schema")
+    require(type(value["assetCapabilityVersion"]) is int and value["assetCapabilityVersion"] == 1, "unsupported asset capability version")
+    if value["schema"] == 2:
+        require(is_account_release(value), "unsupported account release protocol")
+        validate_database_contract(value["database"])
+    return value
+
+
+def validate_manifest(value, version=None, revision=None):
+    require(isinstance(value, dict), "invalid manifest fields")
+    fields = metadata_fields(value.get("schema"))
+    require(set(value) == (ACCOUNT_MANIFEST_FIELDS if value["schema"] == 2 else MANIFEST_FIELDS), "invalid manifest fields")
+    validate_metadata({key: value[key] for key in fields})
+    actual_version, actual_revision = value["version"], value["revision"]
+    require(version is None or version == actual_version, "manifest version mismatch")
+    require(revision is None or revision == actual_revision, "manifest revision mismatch")
     for key in ("archiveSha256", "sbomSha256", "releasePolicySha256"):
         require(isinstance(value[key], str) and SHA256.fullmatch(value[key]), "invalid manifest digest")
-    validate_policy({key: value[key] for key in ("application", "databaseMode", "browserWorkspaceSchema", "assetCapabilityVersion", "rollbackCompatibility")} | {"version": actual_version[1:]}, actual_version)
+    policy_fields = POLICY_FIELDS | ({"assetAccessProtocol", "database"} if value["schema"] == 2 else set())
+    require(value["schema"] == 2 or value["databaseMode"] == "none", "legacy metadata cannot declare a database adapter")
+    validate_policy({key: value[key] for key in policy_fields} | {"version": actual_version[1:]}, actual_version)
     return value
 
 
@@ -184,7 +236,7 @@ def _inspect_archive(archive, expected_manifest=None):
         require(sha256_file(archive) == expected_manifest["archiveSha256"], "archive digest mismatch")
     try:
         with tarfile.open(archive, "r:gz") as bundle:
-            members, metadata_bytes, total = {}, {}, 0
+            members, metadata_bytes, maintenance_hashes, total = {}, {}, {}, 0
             # Enforce limits as headers arrive. getmembers() would allocate the
             # whole untrusted member list before the count could be checked.
             for member in bundle:
@@ -200,6 +252,10 @@ def _inspect_archive(archive, expected_manifest=None):
                 if name in {"release.json", "release-policy.json"}:
                     require(member.isfile() and member.size <= 64 * 1024, "runtime metadata is too large or is a link")
                     metadata_bytes[name] = bundle.extractfile(member).read(64 * 1024 + 1)
+                if name.startswith("maintenance/") and member.isfile():
+                    limit = 10 * 1024 * 1024 if name == "maintenance/cli.mjs" else 1024 * 1024
+                    require(0 < member.size <= limit, "invalid maintenance payload size")
+                    maintenance_hashes[name] = hashlib.sha256(bundle.extractfile(member).read(limit + 1)).hexdigest()
             require(members, "runtime archive is empty")
             required = {"server.js", "package.json", "release.json", "release-policy.json"}
             require(required <= members.keys() and all(members[name].isfile() for name in required), "runtime entry files are missing or linked")
@@ -209,12 +265,25 @@ def _inspect_archive(archive, expected_manifest=None):
                 return json.loads(data), data
             metadata, _ = read_json("release.json")
             policy, policy_bytes = read_json("release-policy.json")
-            require(isinstance(metadata, dict) and set(metadata) == METADATA_FIELDS, "invalid runtime release metadata")
+            validate_metadata(metadata)
+            fields = metadata_fields(metadata["schema"])
             if expected_manifest is not None:
-                require(metadata == {key: expected_manifest[key] for key in METADATA_FIELDS}, "runtime identity differs from manifest")
+                require(metadata == {key: expected_manifest[key] for key in fields}, "runtime identity differs from manifest")
                 require(hashlib.sha256(policy_bytes).hexdigest() == expected_manifest["releasePolicySha256"], "runtime policy digest mismatch")
                 require(policy["rollbackCompatibility"] == expected_manifest["rollbackCompatibility"], "runtime rollback policy mismatch")
             validate_policy(policy, metadata["version"])
+            require(policy["browserWorkspaceSchema"] == metadata["browserWorkspaceSchema"] and policy["assetCapabilityVersion"] == metadata["assetCapabilityVersion"], "runtime data contract differs from policy")
+            if is_account_release(metadata):
+                require(all(policy.get(key) == metadata[key] for key in ("databaseMode", "assetAccessProtocol", "database")), "runtime database contract differs from policy")
+                expected_files = {"maintenance/cli.mjs"} | {"maintenance/migrations/" + item["name"] for item in metadata["database"]["migrations"]}
+                actual_files = {name for name in members if name.startswith("maintenance/") and not members[name].isdir()}
+                directories = {name for name in members if name == "maintenance" or name.startswith("maintenance/") if members[name].isdir()}
+                require(actual_files == expected_files and directories <= {"maintenance", "maintenance/migrations"}, "maintenance runtime must contain exactly the fixed entrypoint and migration set")
+                require(all(members[name].isfile() for name in expected_files), "maintenance runtime cannot contain links")
+                for migration in metadata["database"]["migrations"]:
+                    require(maintenance_hashes["maintenance/migrations/" + migration["name"]] == migration["sha256"], "packaged migration differs from approved digest")
+            else:
+                require(policy["databaseMode"] == "none" and not any(name == "maintenance" or name.startswith("maintenance/") for name in members), "legacy runtime cannot contain an account maintenance adapter")
             return metadata, list(members.values())
     except (tarfile.TarError, OSError, KeyError, ValueError, UnicodeError):
         raise ReleaseError("invalid runtime archive") from None

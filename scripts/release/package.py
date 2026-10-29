@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from common import (APPLICATION, ARCHIVE, METADATA_FIELDS, ReleaseError, inspect_archive,
+from common import (APPLICATION, ARCHIVE, ReleaseError, inspect_archive,
                     json_bytes, require, safe_extract_runtime, safe_runtime_path, safe_relative_link,
                     sha256_file, utcnow, validate_bundle, validate_identity, validate_policy)
 
@@ -111,6 +111,34 @@ def make_sbom(runtime, metadata):
             "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": package["SPDXID"]} for package in packages]}
 
 
+def validate_maintenance_source(source, database):
+    """Approval stays in reviewed source; generated output cannot approve new SQL."""
+    maintenance = source / ".next/maintenance"
+    require(maintenance.is_dir() and not maintenance.is_symlink(), "build the fixed database maintenance runtime before packaging")
+    require({item.name for item in maintenance.iterdir()} == {"cli.mjs", "migrations"}, "unexpected maintenance build output")
+    entry, migrations = maintenance / "cli.mjs", maintenance / "migrations"
+    require(entry.is_file() and not entry.is_symlink() and 0 < entry.stat().st_size <= 10 * 1024 * 1024, "maintenance entrypoint is missing or linked")
+    require(migrations.is_dir() and not migrations.is_symlink(), "maintenance migration directory is missing or linked")
+    try:
+        catalog_file = source / "scripts/database/migration-catalog.ts"
+        require(catalog_file.is_file() and not catalog_file.is_symlink(), "migration approval catalog is missing or linked")
+        entries = re.findall(r'^\s*"([0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.sql)": "([0-9a-f]{64})",?\s*$', catalog_file.read_text(), re.MULTILINE)
+        expected = [(entry["name"], entry["sha256"]) for entry in database["migrations"]]
+        require(entries == expected, "database contract differs from reviewed migration catalog")
+        require(database["minVersion"] == database["maxVersion"] == expected[-1][0][:4], "maintenance runtime requires the current reviewed database version")
+        source_migrations = source / "migrations"
+        require(source_migrations.is_dir() and not source_migrations.is_symlink(), "migration source directory is missing or linked")
+        for directory in (source_migrations, migrations):
+            require({file.name for file in directory.iterdir()} == {name for name, _ in expected}, "migration file set differs from reviewed catalog")
+            for name, digest in expected:
+                file = directory / name
+                require(file.is_file() and not file.is_symlink() and file.stat().st_nlink == 1 and 0 < file.stat().st_size <= 1024 * 1024, "migration source file is missing, linked or oversized")
+                require(sha256_file(file) == digest, "migration source or build differs from reviewed digest")
+    except (OSError, UnicodeError):
+        raise ReleaseError("cannot verify reviewed maintenance source") from None
+    return maintenance
+
+
 def package_bundle(source_root, output, version, revision, *, built_at=None, verify_source=True):
     source, output = Path(source_root).resolve(), Path(output)
     validate_identity(version, revision)
@@ -124,9 +152,13 @@ def package_bundle(source_root, output, version, revision, *, built_at=None, ver
     traced = source / ".next/standalone"
     require(traced.is_dir() and not traced.is_symlink() and (traced / "server.js").is_file(), "build Next standalone before packaging")
     require((source / ".next/static").is_dir(), "Next static assets are missing")
-    metadata = {"schema": 1, "application": APPLICATION, "version": version, "revision": revision,
+    account = policy["databaseMode"] == "postgresql"
+    maintenance = validate_maintenance_source(source, policy["database"]) if account else None
+    metadata = {"schema": 2 if account else 1, "application": APPLICATION, "version": version, "revision": revision,
                 "platform": "linux/amd64", "builtAt": built_at or utcnow(),
                 "browserWorkspaceSchema": policy["browserWorkspaceSchema"], "assetCapabilityVersion": policy["assetCapabilityVersion"]}
+    if account:
+        metadata.update({key: policy[key] for key in ("databaseMode", "assetAccessProtocol", "database")})
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="qintopia-image-package-") as scratch:
         runtime = Path(scratch) / "runtime"
@@ -137,6 +169,9 @@ def package_bundle(source_root, output, version, revision, *, built_at=None, ver
         for source_path, destination in [(source / "public", runtime / "public"), (source / ".next/static", runtime / ".next/static")]:
             if source_path.exists():
                 materialize(source_path, destination, source_path.resolve())
+        if maintenance is not None:
+            require(not (runtime / "maintenance").exists(), "standalone contains an unmanaged maintenance directory")
+            materialize(maintenance, runtime / "maintenance", maintenance.resolve())
         require(not (runtime / "release.json").exists() and not (runtime / "release-policy.json").exists(), "build already contains unmanaged release metadata")
         policy_bytes = json_bytes(policy)
         (runtime / "release.json").write_bytes(json_bytes(metadata))
@@ -156,7 +191,7 @@ def package_bundle(source_root, output, version, revision, *, built_at=None, ver
                         archive.addfile(entry, body)
                 else:
                     archive.addfile(entry)
-        manifest = {**metadata, "databaseMode": "none", "rollbackCompatibility": policy["rollbackCompatibility"],
+        manifest = {**metadata, "databaseMode": policy["databaseMode"], "rollbackCompatibility": policy["rollbackCompatibility"],
                     "archiveSha256": sha256_file(output / ARCHIVE), "sbomSha256": sha256_file(output / "sbom.spdx.json"),
                     "releasePolicySha256": hashlib.sha256(policy_bytes).hexdigest()}
         (output / "manifest.json").write_bytes(json_bytes(manifest))
