@@ -11,10 +11,13 @@ export interface CreationHistoryProps {
   pending: boolean
   onSelect: (id: string) => void
   onCancel: (id: string) => void
+  onCheckStatus?: (id: string) => void
+  onRepair?: (id: string) => void
+  onDownloadDocument?: (document: NonNullable<Generation["document"]>) => void
   className?: string
 }
 
-export function CreationHistory({ generations, selectedId, pending, onSelect, onCancel, className }: CreationHistoryProps) {
+export function CreationHistory({ generations, selectedId, pending, onSelect, onCancel, onCheckStatus, onRepair, onDownloadDocument, className }: CreationHistoryProps) {
   const ordered = [...generations].sort((a, b) => b.timestamp - a.timestamp)
   return (
     <section aria-label="创作历史" className={cn("flex min-h-0 flex-col", className)}>
@@ -26,7 +29,7 @@ export function CreationHistory({ generations, selectedId, pending, onSelect, on
           const parentLabel = parent?.version ? `基于 V${parent.version}` : undefined
           const complete = generation.status === "complete" && Boolean(generation.imageUrl)
           const selected = generation.id === selectedId
-          const label = generation.status === "loading" ? "生成中" : generation.status === "error" ? "未完成" : `V${generation.version ?? 1}`
+          const label = generation.runStatus === "unknown" ? "结果待确认" : generation.runStatus === "save_pending" ? "等待补记保存" : generation.status === "loading" ? "生成中" : generation.status === "error" ? "未完成" : `V${generation.version ?? 1}`
           return (
             <article key={generation.id} data-generation-id={generation.id} className={cn("overflow-hidden rounded-md border", selected ? "border-white/40 bg-white/10" : "border-white/10 bg-white/[0.025]")}>
               {complete ? (
@@ -40,9 +43,15 @@ export function CreationHistory({ generations, selectedId, pending, onSelect, on
               ) : (
                 <div className="flex items-center justify-between gap-2 p-3">
                   <div className="flex items-center gap-2 text-xs text-gray-300">{generation.status === "loading" ? <Loader2 className="size-4 animate-spin" /> : <AlertCircle className="size-4 text-amber-300" />}<span>{label}{parentLabel ? ` · ${parentLabel}` : ""}</span></div>
-                  {generation.status === "loading" && <button type="button" onClick={() => onCancel(generation.id)} className="rounded border border-white/20 px-2 py-1 text-xs text-gray-300 hover:bg-white/10">取消生成</button>}
+                  {generation.status === "loading" && <button type="button" onClick={() => onCancel(generation.id)} className="rounded border border-white/20 px-2 py-1 text-xs text-gray-300 hover:bg-white/10">停止等待</button>}
                 </div>
               )}
+              {(generation.runStatus === "unknown" || generation.runStatus === "save_pending") && <div className="flex gap-2 px-3 pb-3">
+                <button type="button" onClick={() => onCheckStatus?.(generation.id)} className="rounded border border-white/20 px-2 py-1 text-xs">查看状态</button>
+                <button type="button" onClick={() => onRepair?.(generation.id)} className="rounded border border-white/20 px-2 py-1 text-xs">仅补记保存</button>
+              </div>}
+              <p className="px-3 pb-2 text-[11px] text-gray-500">{[generation.aspectRatio, generation.quality, generation.document ? `文档：${generation.document.name}` : undefined].filter(Boolean).join(" · ")}</p>
+              {generation.document && onDownloadDocument && <button type="button" onClick={() => onDownloadDocument(generation.document!)} className="mx-3 mb-3 rounded border border-white/20 px-2 py-1 text-xs text-gray-300 hover:bg-white/10">下载文档：{generation.document.name}</button>}
               <p className="select-text whitespace-pre-wrap break-words px-3 pb-3 text-xs leading-relaxed text-gray-400">{generation.prompt}</p>
               {generation.status === "error" && generation.error && <p className="px-3 pb-3 text-xs leading-relaxed text-amber-300">{generation.error}</p>}
             </article>

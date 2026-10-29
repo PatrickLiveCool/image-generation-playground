@@ -109,7 +109,7 @@ test("fixed migration source rejects SQL alterations and alternate paths before 
   }
   assert.throws(() => verifyApprovedMigration("../0001-accounts.sql", sql), /审核哈希/)
   assert.throws(() => verifyApprovedMigration("0002-unreviewed.sql", sql), /审核哈希/)
-  assert.deepEqual((await loadMigrations()).map(item => item.name), ["0001-accounts.sql", "0002-provider-settings.sql", "0003-provider-admission.sql"])
+  assert.deepEqual((await loadMigrations()).map(item => item.name), ["0001-accounts.sql", "0002-provider-settings.sql", "0003-provider-admission.sql", "0004-private-workspace.sql"])
 })
 
 test("migration identity failure never sends ledger creation or advisory lock", async () => {

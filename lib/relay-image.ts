@@ -52,7 +52,10 @@ export function upstreamError(status: number): ProviderError {
     : status === 429 ? "中转限流或额度不足，请稍后重试并检查账户额度。"
     : status === 400 || status === 422 ? "中转不接受当前参数，请检查模型、接口类型、图片尺寸或参考图支持情况。"
     : `中转请求失败（HTTP ${status}），请检查服务状态。`
-  return new ProviderError(message, status === 429 ? 429 : 502)
+  const code = status === 401 || status === 403 ? "PROVIDER_AUTH_REJECTED"
+    : status === 400 || status === 404 || status === 422 ? "PROVIDER_REQUEST_REJECTED"
+    : status === 429 ? "PROVIDER_RATE_LIMITED" : "PROVIDER_UPSTREAM_FAILED"
+  return new ProviderError(message, status === 429 ? 429 : 502, code)
 }
 
 // Parse common Images and Chat Completions response shapes without inferring a model provider.

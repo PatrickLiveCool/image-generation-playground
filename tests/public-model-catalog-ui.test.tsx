@@ -96,6 +96,7 @@ async function mount(context: TestContext, accountId: string, replies: PublicMod
   context.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
     requests.push({ path, init })
     if (path === "/api/version") return Response.json({ version: "development" })
+    if (path === "/api/creations") return Response.json({ creations: [{ id: "11111111-1111-4111-8111-111111111111", title: "测试创作", revision: 1, createdAt: 100, updatedAt: 100, versions: [] }] })
     assert.equal(path, "/api/models", "UI verification must never call a generation or external endpoint")
     const reply = replies.shift()
     assert.ok(reply, "Unexpected catalog request")
@@ -157,7 +158,7 @@ test("已选模型被刷新删除后保留草稿选择、提示且禁止生成�
   await act(async () => { await delay(220) })
   assert.equal((await draft()).selectedMappingId, "mapping-a")
   await flush(() => button("生成图片").click())
-  assert.ok(requests.every(request => request.path === "/api/models" || request.path === "/api/version"))
+  assert.ok(requests.every(request => request.path === "/api/models" || request.path === "/api/version" || request.path === "/api/creations"))
 
   await chooseModel("模型 B")
   assert.doesNotMatch(win.document.body.textContent, /之前选择的模型已被移除/)

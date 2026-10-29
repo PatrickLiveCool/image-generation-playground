@@ -15,6 +15,7 @@ test("actual IndexedDB and hook hydration keep account workspaces, emergency dra
     localStorage: browser.localStorage, sessionStorage: browser.sessionStorage, indexedDB: new IDBFactory(), IS_REACT_ACT_ENVIRONMENT: true })) {
     Object.defineProperty(globalThis, key, { value, writable: true, configurable: true })
   }
+  let remoteAccount = "account-a"
   const requests: string[] = []
   const reads: string[] = []
   const originalRead = localStorage.getItem.bind(localStorage)
@@ -22,6 +23,7 @@ test("actual IndexedDB and hook hydration keep account workspaces, emergency dra
   t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
     requests.push(String(url))
     assert.equal(init?.body, undefined)
+    if (String(url) === "/api/creations") return Response.json({ creations: remoteAccount === "account-a" ? [{ id: "creation-a", title: "A", revision: 1, createdAt: 100, updatedAt: 100, versions: [] }] : [] })
     return Response.json({ revision: 1, configured: true, apiMode: "images", mappings: [{ id: "shared", name: "共用模型", aspectRatios: ["square"] }] })
   })
   const { createRoot } = await import("react-dom/client")
@@ -63,6 +65,7 @@ test("actual IndexedDB and hook hydration keep account workspaces, emergency dra
   const root = createRoot(container)
   async function renderAccount(id: string) {
     latest = undefined
+    remoteAccount = id
     await act(async () => root.render(createElement(Probe, { id, key: id })))
     for (let i = 0; i < 100 && (!snapshot()?.workspace.ready || !snapshot()?.provider.ready); i++) {
       await act(async () => { await wait(5) })
@@ -90,7 +93,7 @@ test("actual IndexedDB and hook hydration keep account workspaces, emergency dra
     const restoredB = await renderAccount("account-b")
     assert.equal(restoredB.workspace.activeCreation?.draft.prompt, "B private draft")
     assert.ok(requests.length >= 4)
-    assert.ok(requests.every(path => path === "/api/models"))
+    assert.ok(requests.every(path => path === "/api/models" || path === "/api/creations"))
     assert.ok(reads.every(key => !key.startsWith("image-playground-api-settings")))
     assert.equal(originalRead("image-playground-api-settings-v1")?.includes("anonymous-secret"), true)
   } finally {

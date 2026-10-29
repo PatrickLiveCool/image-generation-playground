@@ -13,21 +13,24 @@ export interface CreationListProps {
   activeId: string
   onSelect: (id: string) => void
   onCreate: () => void
-  onRename: (id: string, title: string) => void
+  onRename: (id: string, title: string) => void | Promise<void>
 }
 
 export function CreationList({ creations, activeId, onSelect, onCreate, onRename }: CreationListProps) {
   const [editing, setEditing] = useState<{ id: string; title: string } | null>(null)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const active = creations.find(creation => creation.id === activeId)
   const startRename = (creation: { id: string; title: string }) => { setEditing(creation); setError("") }
-  const saveName = (event: FormEvent) => {
+  const saveName = async (event: FormEvent) => {
     event.preventDefault()
     const title = editing?.title.trim() ?? ""
     if (!title) { setError("请填写创作名称。"); return }
     if (!editing) return
-    try { onRename(editing.id, title); setEditing(null) }
-    catch { setError("名称未能保存，请重试。") }
+    setSaving(true)
+    try { await onRename(editing.id, title); setEditing(null) }
+    catch (error) { setError(error instanceof Error ? error.message : "名称未能保存，请重试。") }
+    finally { setSaving(false) }
   }
 
   return (
@@ -73,7 +76,7 @@ export function CreationList({ creations, activeId, onSelect, onCreate, onRename
             <label htmlFor="creation-name" className="sr-only">创作名称</label>
             <Input id="creation-name" value={editing?.title ?? ""} onChange={event => setEditing(current => current && { ...current, title: event.target.value })} maxLength={60} className="border-white/20 bg-black/40" autoFocus />
             {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
-            <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setEditing(null)} className="hover:bg-white/10 hover:text-white">取消</Button><Button type="submit" className="bg-white text-black hover:bg-gray-200">保存名称</Button></div>
+            <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setEditing(null)} className="hover:bg-white/10 hover:text-white">取消</Button><Button type="submit" disabled={saving} className="bg-white text-black hover:bg-gray-200">保存名称</Button></div>
           </form>
         </DialogContent>
       </Dialog>
