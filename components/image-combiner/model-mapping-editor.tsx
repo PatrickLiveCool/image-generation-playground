@@ -41,12 +41,14 @@ export function ModelMappingEditor({ mappings, models, modelsSynced, onChange }:
         <Button
           type="button"
           variant="outline"
-          onClick={() => onChange([...mappings, { id: crypto.randomUUID(), name: "", modelId: "" }])}
+          disabled={mappings.length >= 100}
+          onClick={() => { if (mappings.length < 100) onChange([...mappings, { id: crypto.randomUUID(), name: "", modelId: "" }]) }}
           className="shrink-0 border-white/20 bg-transparent text-white hover:bg-white/10 hover:text-white"
         >
           <Plus className="h-4 w-4" />添加映射
         </Button>
       </div>
+      {mappings.length >= 100 && <p role="status" className="text-xs text-amber-300">最多添加 100 条映射；删除一条后可继续添加。</p>}
       <datalist id={modelListId}>
         {models.map((model) => <option key={model.id} value={model.id} />)}
       </datalist>

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process"
 import type { PoolClient } from "pg"
 import { createDatabasePool, getDatabase, closeDatabase, withTransaction } from "../lib/database"
 import { readDatabaseConfiguration, verifyDatabaseIdentity } from "../lib/database-target"
-import { migrateDatabase } from "../scripts/database/migrate"
+import { loadMigrations, migrateDatabase } from "../scripts/database/migrate"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
 import { inspectLocalFixture } from "../scripts/database/bootstrap-local.mjs"
 
@@ -24,8 +24,11 @@ test("isolated PostgreSQL verifies migration locking/idempotence, runtime CRUD a
   Object.assign(process.env, localEnvironment)
   await closeDatabase()
   const results = await Promise.all([migrateDatabase(localEnvironment), migrateDatabase(localEnvironment)])
-  assert.equal(results.reduce((count, result) => count + result.applied.length, 0) <= 1, true)
-  assert.equal(results.reduce((count, result) => count + result.skipped.length, 0) >= 1, true)
+  const migrations = await loadMigrations()
+  const applied = results.flatMap(result => result.applied)
+  assert.equal(new Set(applied).size, applied.length)
+  assert.ok(applied.length <= migrations.length)
+  assert.ok(results.reduce((count, result) => count + result.skipped.length, 0) >= migrations.length)
   const runtime = await getDatabase()
   await assertAccountTestFixture(runtime)
   assert.equal(await getDatabase(), runtime)
@@ -35,9 +38,9 @@ test("isolated PostgreSQL verifies migration locking/idempotence, runtime CRUD a
   let fixtureCreated = false
   try {
     const history = await migrator.query("SELECT version, sha256 FROM app.schema_migrations")
-    assert.equal(history.rowCount, 1)
-    assert.equal(history.rows[0].version, "0001")
-    assert.match(history.rows[0].sha256, /^[a-f0-9]{64}$/)
+    assert.equal(history.rowCount, migrations.length)
+    assert.deepEqual(history.rows.map(row => row.version).sort(), migrations.map(item => item.version))
+    for (const row of history.rows) assert.match(row.sha256, /^[a-f0-9]{64}$/)
     await migrator.query("CREATE TABLE app.database_boundary_fixture (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, value text NOT NULL)")
     fixtureCreated = true
     const inserted = await runtime.query("INSERT INTO app.database_boundary_fixture (value) VALUES ($1) RETURNING id", ["synthetic"])

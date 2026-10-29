@@ -1,7 +1,8 @@
 "use client"
 
-import type { ModelMapping, ProviderSettings } from "@/lib/api-provider-types"
+import type { ProviderSettings } from "@/lib/api-provider-types"
 import type React from "react"
+import type { PublicModelMapping } from "@/lib/provider-configuration-types"
 import { memo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -14,10 +15,9 @@ import { isImageFile } from "@/lib/image-utils"
 import type { Generation, ThinkingLevel, Resolution, Quality } from "./types"
 
 interface InputSectionProps {
-  mappings: ModelMapping[]
+  mappings: PublicModelMapping[]
   apiMode: ProviderSettings["apiMode"]
   apiConfigured: boolean
-  onOpenApiSettings: () => void
   prompt: string
   setPrompt: (prompt: string) => void
   aspectRatio: string
@@ -63,7 +63,7 @@ interface InputSectionProps {
 }
 
 export const InputSection = memo(function InputSection({
-  mappings, apiMode, apiConfigured, onOpenApiSettings,
+  mappings, apiMode, apiConfigured,
   prompt, setPrompt, aspectRatio, setAspectRatio, availableAspectRatios,
   selectedMappingId, setSelectedMappingId, quality, setQuality,
   useUrls, setUseUrls, image1Preview, image2Preview, image1Url, image2Url, documentName, documentText, documentFile,
@@ -103,8 +103,8 @@ export const InputSection = memo(function InputSection({
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {!apiConfigured && <button type="button" onClick={onOpenApiSettings} className="rounded-md border border-white/15 px-3 py-2 text-left text-xs text-gray-300 hover:bg-white/5">配置你的 Base URL 和 Token，开始使用 →</button>}
-      {apiConfigured && !mappings.length && <button type="button" onClick={onOpenApiSettings} className="rounded-md border border-white/15 px-3 py-2 text-left text-xs text-gray-300 hover:bg-white/5">添加模型映射，设置你想显示的名称 →</button>}
+      {!apiConfigured && <p role="status" className="rounded-md border border-white/15 px-3 py-2 text-xs text-gray-300">当前暂无可用模型，请联系管理员完成配置。</p>}
+      {apiConfigured && !mappings.length && <p role="status" className="rounded-md border border-white/15 px-3 py-2 text-xs text-gray-300">模型目录为空，请联系管理员添加名称映射。</p>}
 
       {editing && (
         <div className="flex items-center gap-3 rounded-md border border-white/20 bg-white/5 p-2.5">

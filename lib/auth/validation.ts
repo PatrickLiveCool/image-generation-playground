@@ -20,12 +20,13 @@ export function validatePassword(value: unknown): string {
   return value
 }
 
-export async function readJson(request: Request): Promise<Record<string, unknown>> {
+export async function readJson(request: Request, maxBytes = MAX_JSON_BYTES): Promise<Record<string, unknown>> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 2 * 1024 * 1024) throw invalidInput()
   if (!/^application\/json(?:;|$)/i.test(request.headers.get("content-type") ?? "") || !request.body) throw invalidInput()
   const reader = request.body.getReader()
   const cancel = () => { void reader.cancel().catch(() => undefined) }
   const declaredLength = request.headers.get("content-length")
-  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > MAX_JSON_BYTES)) {
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
     cancel()
     reader.releaseLock()
     throw invalidInput()
@@ -50,9 +51,9 @@ export async function readJson(request: Request): Promise<Record<string, unknown
       if (Date.now() >= deadline) throw timeout()
       const { done, value } = await Promise.race([reader.read(), stopped])
       if (done) break
-      if (++chunkCount > MAX_JSON_BYTES) throw invalidInput()
+      if (++chunkCount > maxBytes) throw invalidInput()
       bytes += value.byteLength
-      if (bytes > MAX_JSON_BYTES) throw invalidInput()
+      if (bytes > maxBytes) throw invalidInput()
       if (value.byteLength) chunks.push(value)
     }
     const body = new Uint8Array(bytes)
