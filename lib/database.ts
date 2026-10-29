@@ -16,6 +16,19 @@ export function createDatabasePool(
   environment: NodeJS.ProcessEnv = process.env,
   factory: PoolFactory = (configuration) => new Pool(configuration),
 ): Pool {
+  return configuredPool(purpose, environment, factory, purpose === "runtime" ? 4 : 1)
+}
+
+/** 维护预检串行核对两种身份；无论身份是哪一种，池上限都固定为1。 */
+export function createMaintenanceDatabasePool(
+  purpose: DatabasePurpose,
+  environment: NodeJS.ProcessEnv = process.env,
+  factory: PoolFactory = (configuration) => new Pool(configuration),
+): Pool {
+  return configuredPool(purpose, environment, factory, 1)
+}
+
+function configuredPool(purpose: DatabasePurpose, environment: NodeJS.ProcessEnv, factory: PoolFactory, maximum: number): Pool {
   const configuration = readDatabaseConfiguration(purpose, environment)
   const pool = factory({
     host: configuration.host,
@@ -24,7 +37,7 @@ export function createDatabasePool(
     user: configuration.user,
     password: configuration.password,
     ssl: false,
-    max: purpose === "runtime" ? 4 : 1,
+    max: maximum,
     connectionTimeoutMillis: 5_000,
     statement_timeout: 15_000,
     lock_timeout: 5_000,

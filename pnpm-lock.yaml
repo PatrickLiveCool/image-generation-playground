@@ -246,6 +246,9 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.2.3(@types/react@19.2.11)
+      esbuild:
+        specifier: 0.27.7
+        version: 0.27.7
       fake-indexeddb:
         specifier: 6.2.6
         version: 6.2.6

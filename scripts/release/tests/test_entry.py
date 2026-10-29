@@ -40,8 +40,10 @@ class EntryTest(unittest.TestCase):
                 WRAPPER.validated(argument, 'qintopia-image-deploy')
 
     def test_recovery_and_bootstrap_are_root_only(self):
-        for operation in ['recover', 'bootstrap']:
+        for operation in ['recover', 'bootstrap', 'service-maintenance', 'database-status', 'database-backup', 'database-restore', 'database-verify-restore', 'database-bootstrap-admin', 'database-verify-bootstrap-admin']:
             self.assertEqual(WRAPPER.validated([operation], None), [operation])
+            with self.assertRaises(ValueError):
+                SSH.parse_command(operation)
             with self.assertRaises(ValueError):
                 WRAPPER.validated([operation], 'qintopia-image-deploy')
             with self.assertRaises(ReleaseError):

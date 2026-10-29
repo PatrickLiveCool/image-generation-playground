@@ -4,77 +4,16 @@ import type { AdminProviderConfiguration, ProviderConfigurationInput, PublicMode
 import { AccountError, invalidInput } from "./auth/errors"
 import { accountIdentity, recheckAccount, requireAccount } from "./auth/guards"
 import { getDatabase, withTransaction } from "./database"
-import { normalizeModelMappings, validateModelMappings } from "./model-mappings"
-import { endpointUrl, normalizeBaseUrl, ProviderError, publicFetch } from "./provider-network"
+import { endpointUrl, ProviderError, publicFetch } from "./provider-network"
 import { decryptProviderSecret, encryptProviderSecret, providerConfigurationKey } from "./provider-secret"
 import { upstreamError } from "./relay-image"
+import { MAX_PROVIDER_JSON_BYTES, validateProviderConfiguration, validateProviderDraft, validateProviderRevision } from "./provider-configuration-validation"
+export { MAX_PROVIDER_JSON_BYTES, validateProviderConfiguration } from "./provider-configuration-validation"
 import { aspectRatiosForModel } from "../components/image-combiner/model-catalog"
 
-export const MAX_PROVIDER_JSON_BYTES = 2 * 1024 * 1024
 const PROVIDER_LOCK = 1_920_204_002
 type StoredConfiguration = Omit<ProviderConfigurationInput, "settings"> & { baseUrl: string; apiMode: ProviderApiMode; tokenCiphertext: string }
-type DraftConnection = { revision: number; baseUrl: string; apiKey: string; apiMode: ProviderApiMode }
 const columns = '"baseUrl","apiMode","tokenCiphertext",models,mappings,"modelsSynced",revision'
-
-function object(value: unknown, keys: string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) throw invalidInput("模型配置格式不正确。")
-  return value as Record<string, unknown>
-}
-
-function boundedInput(value: unknown) {
-  try {
-    const serialized = JSON.stringify(value)
-    if (!serialized || Buffer.byteLength(serialized, "utf8") > MAX_PROVIDER_JSON_BYTES) throw invalidInput()
-  } catch { throw invalidInput("模型配置超过 2 MiB 或格式不正确。") }
-}
-
-function revision(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) >= 2_147_483_647) throw invalidInput("配置版本无效，请刷新后重试。")
-  return value as number
-}
-
-function connection(value: unknown): ProviderSettings {
-  const input = object(value, ["baseUrl", "apiKey", "apiMode"])
-  let baseUrl: string
-  try { baseUrl = normalizeBaseUrl(input.baseUrl) } catch (error) {
-    throw invalidInput(error instanceof ProviderError ? error.message : "请输入有效的公网 HTTPS 地址。")
-  }
-  if (typeof input.apiKey !== "string" || input.apiKey.length > 4096 || /[\u0000-\u001f\u007f]/.test(input.apiKey)) throw invalidInput("请输入有效的 API Token。")
-  const apiKey = input.apiKey.trim()
-  // 旧秘密只可用于管理员提交的原样地址。不能先规范化地址，再把
-  // 被编辑过的路径、大小写或末尾斜杠当作“未更换地址”。
-  if (!apiKey && input.baseUrl !== baseUrl) throw invalidInput("更换 Base URL 后请重新输入 Token。")
-  if (apiKey && /^[*•●·…xX\s]+$/.test(apiKey)) throw invalidInput("掩码不能作为 Token，请输入新的 Token 或留空保留。")
-  if (input.apiMode !== "images" && input.apiMode !== "chat") throw invalidInput("请选择支持的 API 接口格式。")
-  return { baseUrl, apiKey, apiMode: input.apiMode }
-}
-
-export function validateProviderConfiguration(value: unknown): ProviderConfigurationInput {
-  boundedInput(value)
-  const input = object(value, ["revision", "settings", "models", "mappings", "modelsSynced"])
-  const settings = connection(input.settings)
-  if (!Array.isArray(input.models) || input.models.length > 5000 || !Array.isArray(input.mappings) || input.mappings.length > 100 || typeof input.modelsSynced !== "boolean") throw invalidInput("最多保存 5000 个候选模型和 100 条名称映射。")
-  const models = input.models.map((item): ProviderModel => {
-    const model = object(item, ["id"])
-    if (typeof model.id !== "string" || !model.id.trim() || model.id.length > 256 || /[\u0000-\u001f\u007f]/.test(model.id)) throw invalidInput("候选模型 ID 无效。")
-    return { id: model.id.trim() }
-  })
-  if (new Set(models.map(model => model.id)).size !== models.length) throw invalidInput("候选模型 ID 重复。")
-  const mappings = normalizeModelMappings(input.mappings.map((item): ModelMapping => {
-    const mapping = object(item, ["id", "name", "modelId"])
-    if (typeof mapping.id !== "string" || !mapping.id.trim() || mapping.id !== mapping.id.trim() || mapping.id.length > 128 || /[\u0000-\u001f\u007f]/.test(mapping.id) || typeof mapping.name !== "string" || typeof mapping.modelId !== "string" || /[\u0000-\u001f\u007f]/.test(mapping.name + mapping.modelId)) throw invalidInput("名称映射格式不正确。")
-    return { id: mapping.id, name: mapping.name, modelId: mapping.modelId }
-  }))
-  const mappingError = validateModelMappings(mappings)
-  if (mappingError) throw invalidInput(mappingError)
-  return { revision: revision(input.revision), settings, models, mappings, modelsSynced: input.modelsSynced }
-}
-
-function validateDraft(value: unknown): DraftConnection {
-  boundedInput(value)
-  const input = object(value, ["revision", "baseUrl", "apiKey", "apiMode"])
-  return { revision: revision(input.revision), ...connection({ baseUrl: input.baseUrl, apiKey: input.apiKey, apiMode: input.apiMode }) }
-}
 
 async function storedConfiguration(client: Pick<PoolClient, "query">): Promise<StoredConfiguration | undefined> {
   const { rows: [row] } = await client.query<StoredConfiguration>(`SELECT ${columns} FROM app.provider_settings WHERE singleton=1`)
@@ -132,7 +71,7 @@ export async function saveAdminProvider(headers: Headers, body: unknown): Promis
 
 export async function syncAdminProvider(headers: Headers, body: unknown, signal?: AbortSignal): Promise<{ models: ProviderModel[] }> {
   const identity = await accountIdentity(headers, { admin: true })
-  const draft = validateDraft(body)
+  const draft = validateProviderDraft(body)
   const settings = await withTransaction(async client => {
     await recheckAccount(client, identity, { admin: true })
     const current = await storedConfiguration(client)
@@ -183,7 +122,7 @@ export async function resolveGenerationProvider(headers: Headers, mappingId: str
 /** 在任务受理事务内固定配置；调用方必须已复核身份，且只对新请求调用。 */
 export async function resolveGenerationProviderInTransaction(client: PoolClient, mappingId: string, expectedRevision: number): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number }> {
   if (typeof mappingId !== "string" || !mappingId || mappingId.length > 128) throw invalidInput("请重新选择模型。")
-  revision(expectedRevision)
+  validateProviderRevision(expectedRevision)
   // 与管理员更新行互斥，直到任务和配置快照一并提交；Token 仅返回给首次执行者。
   const { rows: [row] } = await client.query<StoredConfiguration>(`SELECT ${columns} FROM app.provider_settings WHERE singleton=1 FOR SHARE`)
   if (!row) throw new AccountError("PROVIDER_NOT_CONFIGURED", 503, "管理员尚未配置可用模型。")

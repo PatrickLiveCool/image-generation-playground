@@ -14,11 +14,13 @@ function strictBase64(value: unknown, bytes?: number): Buffer {
   return decoded
 }
 
-export function providerConfigurationKey(environment: NodeJS.ProcessEnv = process.env): Buffer {
+type ProviderSecretEnvironment = Partial<NodeJS.ProcessEnv>
+
+export function providerConfigurationKey(environment: ProviderSecretEnvironment = process.env): Buffer {
   return strictBase64(environment.PROVIDER_CONFIG_KEY, 32)
 }
 
-export function encryptProviderSecret(secret: string, environment: NodeJS.ProcessEnv = process.env): string {
+export function encryptProviderSecret(secret: string, environment: ProviderSecretEnvironment = process.env): string {
   if (!secret || secret.length > 4096 || /[\r\n]/.test(secret)) throw failure()
   const nonce = randomBytes(12)
   const cipher = createCipheriv("aes-256-gcm", providerConfigurationKey(environment), nonce)
@@ -27,7 +29,7 @@ export function encryptProviderSecret(secret: string, environment: NodeJS.Proces
   return JSON.stringify({ version: 1, nonce: nonce.toString("base64"), ciphertext: ciphertext.toString("base64"), tag: cipher.getAuthTag().toString("base64") })
 }
 
-export function decryptProviderSecret(envelope: unknown, environment: NodeJS.ProcessEnv = process.env): string {
+export function decryptProviderSecret(envelope: unknown, environment: ProviderSecretEnvironment = process.env): string {
   try {
     const key = providerConfigurationKey(environment)
     if (typeof envelope !== "string" || envelope.length > 24_000) throw failure()

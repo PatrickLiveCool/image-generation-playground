@@ -1,4 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, lstatSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -6,6 +7,38 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const read = (file, rootDir) => readFileSync(resolve(rootDir, file), "utf8");
+
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join("|") === [...keys].sort().join("|");
+}
+
+function checkDatabasePolicy(policy, rootDir) {
+  if (!exactKeys(policy, ["application", "version", "databaseMode", "assetAccessProtocol", "database", "browserWorkspaceSchema", "assetCapabilityVersion", "rollbackCompatibility"])
+      || policy.databaseMode !== "postgresql" || policy.assetAccessProtocol !== "account-private-v1") throw new Error("Release requires the account-private-v1 PostgreSQL contract.");
+  const database = policy.database;
+  if (!exactKeys(database, ["name", "schema", "minVersion", "maxVersion", "migrations"])
+      || database.name !== "qintopia_image" || database.schema !== "app"
+      || !Array.isArray(database.migrations) || !database.migrations.length || database.migrations.length > 128) throw new Error("Invalid project database contract.");
+  const catalogPath = resolve(rootDir, "scripts/database/migration-catalog.ts");
+  if (!lstatSync(catalogPath).isFile() || lstatSync(catalogPath).isSymbolicLink()) throw new Error("Reviewed migration catalog is missing or linked.");
+  const entries = [...readFileSync(catalogPath, "utf8").matchAll(/^\s*"([0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.sql)": "([0-9a-f]{64})",?\s*$/gm)]
+    .map(match => ({ name: match[1], sha256: match[2] }));
+  if (entries.length !== database.migrations.length) throw new Error("Database migration set differs from the reviewed catalog.");
+  const directory = resolve(rootDir, "migrations");
+  if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink()
+      || readdirSync(directory).sort().join("|") !== entries.map(entry => entry.name).join("|")) throw new Error("Migration directory differs from the reviewed catalog.");
+  entries.forEach((entry, index) => {
+    const migration = database.migrations[index];
+    if (!exactKeys(migration, ["name", "sha256"]) || migration.name !== entry.name || migration.sha256 !== entry.sha256
+        || entry.name.slice(0, 4) !== String(index + 1).padStart(4, "0")) throw new Error("Migrations must match the ordered reviewed catalog.");
+    const file = resolve(directory, entry.name), stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size < 1 || stat.size > 1_048_576
+        || createHash("sha256").update(readFileSync(file)).digest("hex") !== entry.sha256) throw new Error("Migration SQL differs from its reviewed digest.");
+  });
+  const latest = entries.at(-1).name.slice(0, 4);
+  if (database.minVersion !== latest || database.maxVersion !== latest) throw new Error("Current runtime requires exactly the reviewed database version.");
+}
 
 function changelogReleaseSection(changelog, version) {
   const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -40,10 +73,10 @@ export function checkRelease({ rootDir = root, tag, environment = process.env } 
   const policy = JSON.parse(read("deploy/release-policy.json", rootDir));
   if (policy.application !== "qintopia-image") throw new Error("Release policy application must be qintopia-image.");
   if (policy.version !== version) throw new Error("Release policy version must match package.json version.");
-  if (policy.databaseMode !== "none") throw new Error("This application has no server database migration phase.");
+  checkDatabasePolicy(policy, rootDir);
   if (policy.browserWorkspaceSchema !== 1 || policy.assetCapabilityVersion !== 1) throw new Error("Review browser workspace and asset capability compatibility before changing their versions.");
-  if (!policy.rollbackCompatibility || !["compatible", "forward-only"].includes(policy.rollbackCompatibility.mode)
-      || typeof policy.rollbackCompatibility.reason !== "string" || !policy.rollbackCompatibility.reason.trim()) {
+  if (!exactKeys(policy.rollbackCompatibility, ["mode", "reason"]) || !["compatible", "forward-only"].includes(policy.rollbackCompatibility.mode)
+      || typeof policy.rollbackCompatibility.reason !== "string" || !policy.rollbackCompatibility.reason.trim() || policy.rollbackCompatibility.reason.length > 1000) {
     throw new Error("Release policy requires an explicit rollback compatibility mode and reason.");
   }
   return { version, tag: effectiveTag ?? `v${version}` };

@@ -3,9 +3,9 @@ import { test } from "node:test"
 import { readFile } from "node:fs/promises"
 import { EventEmitter } from "node:events"
 import type { Pool } from "pg"
-import { createDatabasePool } from "../lib/database"
+import { createDatabasePool, createMaintenanceDatabasePool } from "../lib/database"
 import { DATABASE_IDENTITY_SQL, readDatabaseConfiguration, verifyDatabaseIdentity } from "../lib/database-target"
-import { loadMigrations, runMigrations, verifyApprovedMigration } from "../scripts/database/migrate"
+import { loadMigrations, runMigrations, verifyApprovedMigration, MIGRATION_LEDGER_EXISTS_SQL } from "../scripts/database/migrate"
 import { assertLocalFixture } from "../scripts/database/bootstrap-local.mjs"
 import { localFixtureMarker } from "../scripts/database/bootstrap-local.mjs"
 import { assertMatchingFixtureIdentity, assertSyntheticAccountRows } from "../scripts/database/test-fixture"
@@ -101,6 +101,14 @@ test("identity and effective permission violations issue only one read-only quer
     (error: Error) => !error.message.includes("postgresql:") && !error.message.includes("synthetic"))
 })
 
+test("maintenance pools enforce one connection for either verified identity", () => {
+  for (const purpose of ["runtime", "migration"] as const) createMaintenanceDatabasePool(purpose, environment, configuration => {
+    assert.equal(configuration.max, 1)
+    assert.equal(configuration.user, purpose === "runtime" ? "qintopia_image_app" : "qintopia_image_migrator")
+    return new EventEmitter() as Pool
+  })
+})
+
 test("fixed migration source rejects SQL alterations and alternate paths before executing any SQL", async () => {
   const sql = await readFile(new URL("../migrations/0001-accounts.sql", import.meta.url), "utf8")
   assert.equal(verifyApprovedMigration("0001-accounts.sql", sql).version, "0001")
@@ -129,6 +137,7 @@ test("migration ledger skips prior SQL, rejects drift and rolls back failures wh
     const query = async (sql: string) => {
       sent.push(sql)
       if (sql === DATABASE_IDENTITY_SQL) return { rows: [identity(true)] }
+      if (sql === MIGRATION_LEDGER_EXISTS_SQL) return { rows: [{ present: scenario === "skipped" || scenario === "drift" }] }
       if (sql.startsWith("SELECT version")) return { rows: scenario === "skipped" || scenario === "drift" ?
         [{ version: migration.version, name: migration.name, sha256: scenario === "drift" ? "bad" : migration.sha256 }] : [] }
       if (scenario === "failed" && sql === migration.sql) throw new Error("private PostgreSQL diagnostic")
