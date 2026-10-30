@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.3.0...v0.3.1) (2026-10-30)
+
+
+### Maintenance
+
+* **dev:** prepare staged account and annotation delivery ([#20](https://github.com/PatrickLiveCool/image-generation-playground/issues/20)) ([d9e1b5c](https://github.com/PatrickLiveCool/image-generation-playground/commit/d9e1b5ce6020468451993d05c0cc93eb524fb210))
+
 ## [0.3.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.6...v0.3.0) (2026-10-27)
 
 
