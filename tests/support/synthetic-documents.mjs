@@ -52,4 +52,3 @@ export async function syntheticDocx(options = {}) {
   if (options.malformedHeader) zip.file("word/header1.xml", "<w:hdr><broken>")
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" })
 }
-

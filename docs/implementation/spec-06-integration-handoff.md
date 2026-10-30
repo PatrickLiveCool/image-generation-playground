@@ -1,9 +1,11 @@
 ---
 title: 四个 Epic 集成交接与验收证据
-status: in-progress
+status: done
 updated: 2026-10-30
 storyCount: 20
 stage5_baseline: 1c39609b3a4b8820fb70c8b67eb24af0b5c67ff8
+stage5_implementation_commit: 17e710b2a0e8dc8747aa8fe6fb6298a42e04fedf
+pull_request: https://github.com/PatrickLiveCool/image-generation-playground/pull/25
 context:
   - docs/planning/epics.md
   - docs/architecture/account-persistence/ARCHITECTURE-SPINE.md
@@ -16,7 +18,7 @@ context:
 
 # 四个 Epic 集成交接与验收证据
 
-本文件将已确认的 4 个 Epic、20 条故事映射到当前实现与验证证据。六个检查点中的实现、独立审阅和本地集成验收已经完成，包含阶段 5 的 327 项应用测试、两套构建 HTTP、ego lite 浏览器和实际打包维护 CLI。接下来形成依赖阶段 4 的 Draft PR，并单独核对其精确 head 的 Linux CI。本文不代表正式发布、生产验证或真实模型效果验收。
+本文件将已确认的 4 个 Epic、20 条故事映射到当前实现与验证证据。六个检查点中的实现、独立审阅和本地集成验收已经完成，包含阶段 5 的 327 项应用测试、两套构建 HTTP、ego lite 浏览器和实际打包维护 CLI。交付为依赖阶段 4 的 [Draft PR #25](https://github.com/PatrickLiveCool/image-generation-playground/pull/25)，其精确 head 的 Linux 状态以 [PR 检查](https://github.com/PatrickLiveCool/image-generation-playground/pull/25/checks) 为准。本文不代表正式发布、生产验证或真实模型效果验收。
 
 依据为当前源码、测试、阶段规格与分层运行记录。规划文件中的 `backlog`、架构骨架中的“待实现”，以及早期规格中的历史状态，保留了规划或分工时点；当前实施状态以阶段证据与本文件的分层状态为准，不据此改写原验收条件。
 
@@ -29,9 +31,9 @@ context:
 | 阶段 2：模型后台 | `c4dcdcc`；Draft PR #22，依赖 #21；实现及本地验证记录见 [spec-02](spec-02-model-settings.md)。 |
 | 阶段 3：私有创作 | `b6b32a5`；Draft PR #23，依赖 #22；实现及本地验证记录见 [spec-03](spec-03-private-workspace.md)。 |
 | 阶段 4：发布与恢复 | `1c39609b3a4b8820fb70c8b67eb24af0b5c67ff8`；Draft PR #24，依赖 #23。主实施者已回读该精确 head 的两项 CI 均通过；本地制品恢复链见 [spec-04](spec-04-account-release-recovery.md)。该状态不覆盖阶段 5 工作区。 |
-| 阶段 5：图片批注 | 在上述 head 上增量实施，分支 `codex/image-annotations`。三层审阅的 15 项发现及 2 项复核修复见 [spec-05](spec-05-image-annotations.md)。应用全量 327/327、构建、两套构建 HTTP、浏览器和 Darwin 打包维护 CLI 均通过；提交及本阶段 Draft PR/CI 单独记录。 |
+| 阶段 5：图片批注 | 功能提交 `17e710b`，分支 `codex/image-annotations`，[Draft PR #25](https://github.com/PatrickLiveCool/image-generation-playground/pull/25) 依赖 #24。三层审阅的 15 项发现及 2 项复核修复见 [spec-05](spec-05-image-annotations.md)。应用全量 327/327、构建、两套构建 HTTP、浏览器和 Darwin 打包维护 CLI 均通过；本 PR 的精确 head/CI 由检查页记录。 |
 | 阶段 6：集成交接 | 本文件逐项覆盖 20 条故事、分层验证、真实模型人工场景与生产回退边界；独立范围检查未发现遗漏故事或无关文件混入。 |
-| 合并与正式发布 | 依赖链为 #20 → #21 → #22 → #23 → #24 → 阶段 5 后续 PR；均按 Draft 交付，无合并、Publish 或生产切换结果。 |
+| 合并与正式发布 | 依赖链为 #20 → #21 → #22 → #23 → #24 → #25；均按 Draft 交付，无合并、Publish 或生产切换结果。 |
 | 生产与真实模型 | 未执行本轮生产工具升级、数据库迁移、应用切换或收费模型验收；生产已有版本与公开服务状态不由本地代码推断。 |
 
 本轮已授权连续实现、自行阶段验收、有意义 commit 与 stacked Draft PR。验证只使用本项目专用本机 PostgreSQL、合成账号/文档/图片、模拟模型和内存 COS；没有其他项目数据库写入、真实云对象写入或收费调用授权。旧 COS 对象、匿名浏览器记录和 `ASSET_ACCESS_SECRET` 保留。正式合并、生产维护、Publish、收费模型和删除旧数据分别需要相应授权。
@@ -99,7 +101,7 @@ context:
 | 阶段 5 构建 HTTP | 最新 annotation/private 两套通过；日志 `/private/tmp/image-stage5-annotation-http-reviewed.log`、`/private/tmp/image-stage5-private-http-reviewed.log`。 | annotation 为 4 次模拟调用，含正常 PDF 图像转发、预览、批注、补保存和读取中禁用；private 为 3 次模拟调用、19 次内存 COS 写入。真实模型与真实云写入均 0；浏览器仍独立验收。 |
 | 阶段 5 打包维护 CLI | Darwin arm64 实际打包、校验、解包并执行通过；`/private/tmp/image-stage5-packaged-maintenance-reviewed.log`。 | 5 个固定迁移和初始化/备份/恢复；未上传、发布制品，Linux 仍由对应 CI 单独证明。 |
 | 阶段 5 浏览器 | ego lite 空间 20 验收通过，详细操作与工具限制见 spec-05。 | 开发服务上的原生键盘/指针交互；3 次模拟调用，补保存不增加调用。首次浏览器载入独立会话创建的版本；没有跨物理设备或真实模型效果验收。 |
-| 阶段 5 PR/CI | 本阶段提交后建立依赖 #24 的 Draft PR，单独核对该精确 head。 | 不得用 #24 或本地结果替代本阶段 Linux 检查。 |
+| 阶段 5 PR/CI | [Draft PR #25 检查页](https://github.com/PatrickLiveCool/image-generation-playground/pull/25/checks) 记录最新 head 的 `PR format` 与 `Node and release checks`，后者包含 Linux 构建 HTTP 和打包维护 CLI。 | 发布工具的 8 项本地 skip 由安装固定 SDK 的 Linux 作业覆盖；必须核对同一 head 的最终结果，不得用 #24 或本地结果替代。 |
 
 以上 `/private/tmp/` 路径为本机临时证据定位，不包含凭据且不加入 Git；交付 PR 应保留其安全汇总。截图、用户快照、签名 URL 和 `.local-ops/` 不作为 Git 附件。
 
@@ -110,7 +112,7 @@ context:
 本地实现/验收已关闭，交付与外部执行边界如下：
 
 1. 阶段 5 应用全量、build、两套构建 HTTP、实际打包维护 CLI 和 ego lite 均通过。15 项审阅发现与 2 项复核修复已处置，edge/gap 及末两项 followup 复核通过；独立提交范围检查未发现凭据、签名链接、用户快照、本地图片或生成目录混入。
-2. 阶段 5 需形成有意义提交和依赖 #24 的 Draft PR，核对该精确 head 的 CI 与 Linux 制品/维护 CLI；已有 #24 的绿色结果不能继承给未提交变更。
+2. 阶段 5 已形成有意义提交与依赖 #24 的 Draft PR #25；合并前核对本 PR 最新精确 head 的 CI、Linux 制品及维护 CLI。已有 #24 或 #25 较早提交的绿色结果不能继承给新提交。
 3. 生产服务器受限入口、专用维护 OS 身份、真实秘密与私有 COS、真实数据库迁移/初始管理员和公网访问尚未验收。仅在相应授权后按运行手册执行，不能连接其他项目库证明本项目隔离。
 4. 当前只实现 `overlay-v1`：原图和编号辅助图占用 2 张输入；有额外参考图、含图或无法确认的文档时，批注提交明确拒绝，确认纯文字的 PDF/DOCX/TXT 可用。支持的三种画法均转为编号辅助图，没有省略批注或静默退回纯文字生成；不承诺蒙版、像素精确编辑或任意网关兼容。
 5. 真实模型的区域理解、非目标区域保真度、多个标记的对应关系尚未进行收费验收。代码与合成请求通过仅证明提交正确、权限和恢复逻辑，不能把效果判为通过。
