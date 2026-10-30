@@ -1,0 +1,12 @@
+# 项目级 BMad 配置；仅接入现有文档与已安装 skills，不导入其他项目配置。
+[core]
+project_name = "图像生成实验室"
+user_name = "维护者"
+communication_language = "简体中文"
+document_output_language = "简体中文"
+output_folder = "{project-root}/docs"
+
+[modules.bmm]
+planning_artifacts = "{project-root}/docs/planning"
+implementation_artifacts = "{project-root}/docs/implementation"
+project_knowledge = "{project-root}/docs"

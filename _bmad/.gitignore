@@ -1,0 +1,6 @@
+# Rendered workflows contain machine-specific absolute paths and remain local.
+/render/
+/config.user.toml
+/custom/*.user.toml
+__pycache__/
+*.py[cod]

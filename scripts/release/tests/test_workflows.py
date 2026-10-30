@@ -112,20 +112,55 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_pr_code_and_metadata_checks_are_separate_and_read_only(self) -> None:
         ci = self.workflows["ci"]
         metadata = self.workflows["pr-format"]
-        self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", ci)
-        self.assertNotIn("edited", ci)
+        self.assertIn("types: [opened, edited, synchronize, reopened, ready_for_review]", ci)
         self.assertIn("name: Node and release checks", ci)
         self.assertIn("cancel-in-progress: true", ci)
         self.assertIn("edited", metadata)
         self.assertIn("cancel-in-progress: false", metadata)
         self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"', metadata)
         for workflow in (ci, metadata):
-            self.assertIn("branches: [master]", workflow)
+            self.assertIn("permissions:\n  contents: read\n  pull-requests: read\n", workflow)
             for forbidden in ("pull_request_target", "environment: production", "secrets.", ": write"):
                 self.assertNotIn(forbidden, workflow)
+            self.assertNotRegex(workflow, r"(?m)^\s+environment:")
+            self.assertNotRegex(workflow, r"\bsecrets\s*\[")
         protection = json.loads(read(".github/master-protection.json"))
         self.assertEqual({item["context"] for item in protection["required_status_checks"]["checks"]}, {"PR format", "Node and release checks"})
         self.assertTrue(all(item["app_id"] == 15368 for item in protection["required_status_checks"]["checks"]))
+
+    def test_stacked_prs_share_checks_and_only_master_pushes_trigger_ci(self) -> None:
+        for name in ("ci", "pr-format"):
+            workflow = self.workflows[name]
+            self.assertRegex(
+                workflow,
+                r"(?m)^  pull_request:\n    types: \[[^\n]+\]\n    branches: \[master, 'codex/\*\*'\]\n",
+                name,
+            )
+            # All PR targets must execute the same jobs and steps, without a
+            # base-branch condition that silently skips the stacked PR checks.
+            self.assertNotRegex(workflow, r"(?m)^\s+if:", name)
+            events = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+            self.assertEqual(
+                set(re.findall(r"(?m)^  ([a-z_]+):", events)),
+                {"pull_request", "push"} if name == "ci" else {"pull_request"},
+                name,
+            )
+        self.assertRegex(self.workflows["ci"], r"(?m)^  push:\n    branches: \[master\]\n")
+
+    def test_pr_edits_run_full_checks_without_cancelling_code_for_metadata_only(self) -> None:
+        ci = self.workflows["ci"]
+        concurrency = ci.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
+        # 仅无 base 变化的 edited 事件进入 metadata 队列；目标分支变更、
+        # synchronize 和 master push 共用 code 队列，并执行完整检查。
+        self.assertIn(
+            "group: qintopia-image-ci-${{ github.ref }}-${{ "
+            "github.event_name == 'pull_request' && github.event.action == 'edited' "
+            "&& !github.event.changes.base && 'metadata' || 'code' }}",
+            concurrency,
+        )
+        self.assertIn("cancel-in-progress: true", concurrency)
+        self.assertNotRegex(ci, r"(?m)^\s+if:")
+        self.assertIn("group: qintopia-image-pr-format-${{ github.ref }}", self.workflows["pr-format"])
 
     def test_ci_executes_existing_checks_on_the_locked_runtime(self) -> None:
         ci = self.workflows["ci"]
@@ -137,6 +172,13 @@ class WorkflowSafetyTests(unittest.TestCase):
         package = json.loads(read("package.json"))
         self.assertNotIn("lint", package["scripts"])
         self.assertIn("next typegen", package["scripts"]["typecheck"])
+
+    def test_ci_verifies_bmad_runtime_after_python_setup(self) -> None:
+        ci = self.workflows["ci"]
+        command = "python3 -B -m unittest discover -s _bmad/tests -v"
+        self.assertIn(command, ci)
+        self.assertLess(ci.index("python-version: '3.12'"), ci.index(command))
+        self.assertLess(ci.index(command), ci.index("pnpm test:release"))
 
     def test_real_sdk_tests_are_installed_and_upload_only_skips_deployment(self) -> None:
         for name in ("ci", "release"):
