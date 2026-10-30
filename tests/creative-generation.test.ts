@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert"
 import { test, after } from "node:test"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
@@ -8,8 +8,9 @@ import { createHash } from "node:crypto"
 import ts from "typescript"
 
 const dir = mkdtempSync(path.join(tmpdir(), "creative-generation-contract-"))
+symlinkSync(new URL("../node_modules", import.meta.url), path.join(dir, "node_modules"), "dir")
 const compile = (source: string) => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText
-for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "document-parser", "stored-generation", "private-generation-input"]) {
+for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "document-parser", "document-image-inspection", "image-annotations", "stored-generation", "private-generation-input"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8")
   writeFileSync(path.join(dir, `${name}.js`), compile(source).replace('require("cos-nodejs-sdk-v5")', 'require("./cos-sdk-stub")'))
 }

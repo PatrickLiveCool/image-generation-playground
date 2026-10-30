@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "../lib/account-client"
-import { getPublicModelCatalog, ProviderConfigurationError, readAdminProviderConfiguration, saveAdminProviderConfiguration, syncProviderModels } from "../lib/provider-configuration-client"
+import { getPublicModelCatalog, ProviderConfigurationError, readAdminProviderConfiguration, saveAdminProviderConfiguration, recordProviderAnnotationCapability, disableProviderAnnotationCapability, syncProviderModels } from "../lib/provider-configuration-client"
 import { ALL_ASPECT_RATIO_VALUES } from "../components/image-combiner/model-catalog"
 
-const mapping = { id: "stable-a", name: "均衡", aspectRatios: ["square"] }
+const mapping = { id: "stable-a", name: "均衡", aspectRatios: ["square"], annotation: { available: false, expression: null, maxInputImages: 2, reason: "尚未记录" } }
 const catalog = { revision: 4, configured: true, apiMode: "images", mappings: [mapping] }
 const input = { revision: 4, settings: { baseUrl: "https://synthetic.example/v1", apiKey: "", apiMode: "images" as const }, models: [], mappings: [], modelsSynced: false }
 
@@ -52,4 +52,49 @@ test("公共模型目录拒绝超量、空或重复身份/名称和无效比例"
   assert.equal(accepted.mappings.length, 100)
   assert.deepEqual(accepted.mappings[0].aspectRatios, [...ALL_ASPECT_RATIO_VALUES])
   assert.equal(JSON.stringify(accepted).includes("must-not-propagate"), false)
+})
+
+test("公共目录保留能力状态并拒绝缺失、矛盾或携带私有证据的能力响应", async t => {
+  let response: unknown = catalog
+  t.mock.method(globalThis, "fetch", async () => Response.json(response))
+  assert.deepEqual((await getPublicModelCatalog()).mappings[0].annotation, mapping.annotation)
+  const available = { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null }
+  response = { ...catalog, mappings: [{ ...mapping, annotation: available, modelId: "private-model" }] }
+  const accepted = await getPublicModelCatalog()
+  assert.deepEqual(accepted.mappings[0].annotation, available)
+  assert.equal(JSON.stringify(accepted).includes("private-model"), false)
+  for (const annotation of [undefined, null, { ...available, expression: null }, { ...available, maxInputImages: 3 }, { ...available, evidenceNote: "private-evidence" }, { ...mapping.annotation, reason: null }]) {
+    response = { ...catalog, mappings: [{ ...mapping, annotation }] }
+    await assert.rejects(getPublicModelCatalog(), error => error instanceof ProviderConfigurationError && error.code === "INVALID_RESPONSE")
+  }
+})
+
+test("独立证据记录客户端受相同权限复核与不确定响应保护", async t => {
+  const target = new EventTarget()
+  const original = Object.getOwnPropertyDescriptor(globalThis, "window")
+  Object.defineProperty(globalThis, "window", { configurable: true, value: target })
+  t.after(() => { if (original) Object.defineProperty(globalThis, "window", original); else Reflect.deleteProperty(globalThis, "window") })
+  let rechecks = 0
+  target.addEventListener(ACCOUNT_SESSION_RECHECK_EVENT, () => rechecks++)
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    assert.equal(path, "/api/admin/provider/annotation-capabilities")
+    assert.equal(init?.method, "POST")
+    return Response.json({ error: { code: "FORBIDDEN", message: "需要管理员权限。" } }, { status: 403 })
+  })
+  await assert.rejects(recordProviderAnnotationCapability({ revision: 4, mappingId: "a", evidenceReference: "https://docs.example", evidenceNote: "输入契约核对", confirmed: true }), ProviderConfigurationError)
+  assert.equal(rechecks, 1)
+})
+
+test("停用客户端使用独立DELETE并传播revision冲突与权限复核", async t => {
+  let status = 409
+  let code = "PROVIDER_REVISION_CONFLICT"
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    assert.equal(path, "/api/admin/provider/annotation-capabilities")
+    assert.equal(init?.method, "DELETE")
+    assert.deepEqual(JSON.parse(init?.body as string), { revision: 4, mappingId: "a" })
+    return Response.json({ error: { code, message: "请刷新核对" } }, { status })
+  })
+  await assert.rejects(disableProviderAnnotationCapability({ revision: 4, mappingId: "a" }), error => error instanceof ProviderConfigurationError && error.code === code)
+  status = 403; code = "PASSWORD_CHANGE_REQUIRED"
+  await assert.rejects(disableProviderAnnotationCapability({ revision: 4, mappingId: "a" }), error => error instanceof ProviderConfigurationError && error.code === code)
 })

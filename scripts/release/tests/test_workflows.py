@@ -88,7 +88,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotEqual(self.run_check().returncode, 0)
 
     def test_compatibility_changes_require_contract_updates(self) -> None:
-        for values in ({"databaseMode": "postgres"}, {"browserWorkspaceSchema": 2}, {"assetCapabilityVersion": 2}, {"rollbackCompatibility": {"mode": "compatible", "reason": ""}}):
+        for values in ({"databaseMode": "postgres"}, {"browserWorkspaceSchema": 3}, {"assetCapabilityVersion": 2}, {"rollbackCompatibility": {"mode": "compatible", "reason": ""}}):
             original = (self.source / "deploy/release-policy.json").read_text()
             self.change_json("deploy/release-policy.json", **values)
             self.assertNotEqual(self.run_check().returncode, 0, values)

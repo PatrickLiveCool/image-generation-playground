@@ -101,7 +101,7 @@ def validate_policy(value, version):
     if account:
         require(value["assetAccessProtocol"] == "account-private-v1", "unsupported private asset protocol")
         validate_database_contract(value["database"])
-    require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] == 1, "unsupported browser workspace schema")
+    require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] in ({1, 2} if account else {1}), "unsupported browser workspace schema")
     require(type(value["assetCapabilityVersion"]) is int and value["assetCapabilityVersion"] == 1, "unsupported asset capability version")
     compatibility = value["rollbackCompatibility"]
     require(isinstance(compatibility, dict) and set(compatibility) == {"mode", "reason"}, "invalid rollback policy")
@@ -120,7 +120,7 @@ def validate_metadata(value):
         require(stamp.tzinfo is not None and stamp.utcoffset().total_seconds() == 0, "build timestamp must be UTC")
     except (ValueError, TypeError, AttributeError):
         raise ReleaseError("invalid build timestamp") from None
-    require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] == 1, "unsupported browser workspace schema")
+    require(type(value["browserWorkspaceSchema"]) is int and value["browserWorkspaceSchema"] in ({1, 2} if value["schema"] == 2 else {1}), "unsupported browser workspace schema")
     require(type(value["assetCapabilityVersion"]) is int and value["assetCapabilityVersion"] == 1, "unsupported asset capability version")
     if value["schema"] == 2:
         require(is_account_release(value), "unsupported account release protocol")

@@ -95,7 +95,7 @@ class FakeSystem:
         if command == 'verify' and not compatible:
             raise ReleaseError('synthetic incompatible database')
         return {'command': command, 'ledgerSha256': '4' * 64, 'version': self.database_version,
-                'pending': [] if compatible else ['0004-private-workspace.sql'], 'compatible': compatible, 'connectionBudget': 9}
+                'pending': [] if compatible else ['0005-image-annotations.sql'], 'compatible': compatible, 'connectionBudget': 9}
 
     def maintenance_ready(self, origin):
         if self.maintenance_probe_failure:
@@ -213,7 +213,7 @@ class ServerTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def bundle(self, version='v0.1.0', revision='a' * 40, account=False, rollback='compatible'):
+    def bundle(self, version='v0.1.0', revision='a' * 40, account=False, rollback='compatible', workspace=1, database_version=None):
         folder = self.base / ('bundle-' + revision)
         folder.mkdir()
         metadata = {'schema': 1, 'application': 'qintopia-image', 'version': version, 'revision': revision,
@@ -223,8 +223,11 @@ class ServerTest(unittest.TestCase):
         if account:
             source = pathlib.Path(__file__).resolve().parents[3]
             database = json.loads((source / 'deploy/release-policy.json').read_text())['database']
-            metadata.update(schema=2, databaseMode='postgresql', assetAccessProtocol='account-private-v1', database=database)
-            policy.update(databaseMode='postgresql', assetAccessProtocol='account-private-v1', database=database)
+            if database_version:
+                database.update(minVersion=database_version, maxVersion=database_version,
+                                migrations=[entry for entry in database['migrations'] if entry['name'][:4] <= database_version])
+            metadata.update(schema=2, browserWorkspaceSchema=workspace, databaseMode='postgresql', assetAccessProtocol='account-private-v1', database=database)
+            policy.update(browserWorkspaceSchema=workspace, databaseMode='postgresql', assetAccessProtocol='account-private-v1', database=database)
         entries = {'server.js': b'console.log("test")', 'package.json': b'{"name":"test"}',
                    'release.json': json_bytes(metadata), 'release-policy.json': json_bytes(policy),
                    '.next/static/chunk-' + revision[:6] + '.js': b'chunk-' + revision.encode()}
@@ -497,7 +500,52 @@ class ServerTest(unittest.TestCase):
         self.assertIn('/var/lib/qintopia-image-acme', migration)
         self.assertLess(phases.index('database_preflight'), phases.index('migrating'))
         self.assertLess(phases.index('database_verified'), phases.index('staged'))
-        self.assertEqual(result['database']['after']['version'], '0004')
+        self.assertEqual(result['database']['after']['version'], '0005')
+
+    def test_annotation_upgrade_is_explicit_forward_only_and_keeps_rollback_closed(self):
+        source = self.bundle(account=True, workspace=1, database_version='0004')
+        self.runtime.deploy(*source)
+        self.runtime.acknowledge('complete')
+        result = self.runtime.deploy(*self.bundle('v0.2.0', 'b' * 40, account=True, workspace=2))
+        self.assertEqual(result['status'], 'healthy')
+        self.assertEqual(self.runtime.state['current']['manifest']['browserWorkspaceSchema'], 2)
+        self.assertEqual(result['database']['after']['version'], '0005')
+        self.runtime.acknowledge('complete')
+        current = dict(self.runtime.state['current'])
+        site = pathlib.Path(self.config['nginxSite']).read_bytes()
+        calls = list(self.system.database_calls)
+        with self.assertRaisesRegex(ReleaseError, 'formats are not rollback compatible'):
+            self.runtime.deploy('rollback', *source[1:])
+        self.assertEqual(self.runtime.state['current'], current)
+        self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
+        self.assertEqual(self.system.database_calls, calls)
+        self.runtime.recover()
+        self.assertEqual(self.runtime.state['current'], current)
+        self.assertNotIn('serviceMaintenance', self.runtime.state)
+
+    def test_annotation_failed_upgrade_cannot_restore_schema1_even_when_database_is_compatible(self):
+        self.runtime.deploy(*self.bundle(account=True, workspace=1))
+        self.runtime.acknowledge('complete')
+        source = dict(self.runtime.state['current'])
+        self.system.start_failure = True
+        with self.assertRaises(ReleaseError):
+            self.runtime.deploy(*self.bundle('v0.2.0', 'b' * 40, account=True, workspace=2))
+        self.assertEqual(self.runtime.receipt()['status'], 'service-maintenance')
+        self.assertEqual(self.runtime.state['current'], source)
+        self.assertEqual(self.system.database_version, source['manifest']['database']['maxVersion'])
+        self.assertFalse(self.runtime.compatible_source())
+        self.assertNotIn('proxy_pass', pathlib.Path(self.config['nginxSite']).read_text())
+        restarted = Runtime(self.config, self.system, self.fetch)
+        restarted.recover()
+        self.assertEqual(restarted.receipt()['status'], 'service-maintenance')
+        self.assertFalse(restarted.compatible_source())
+
+    def test_annotation_upgrade_requires_an_existing_account_release(self):
+        site = pathlib.Path(self.config['nginxSite']).read_bytes()
+        with self.assertRaisesRegex(ReleaseError, 'formats are not rollback compatible'):
+            self.runtime.deploy(*self.bundle(account=True, workspace=2))
+        self.assertEqual(self.system.database_calls, [])
+        self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
 
     def test_migration_lost_ack_uses_read_only_verify_without_repeating_ddl(self):
         self.system.migration_lost_receipt = True
@@ -579,7 +627,7 @@ class ServerTest(unittest.TestCase):
         self.runtime.set_access_floor()
         self.runtime.enter_service_maintenance()
         self.runtime.phase('migrating')
-        self.system.database_version = '0004'
+        self.system.database_version = '0005'
         restarted = Runtime(self.config, self.system, self.fetch)
         restarted.recover()
         self.assertEqual([command for command, _ in self.system.database_calls], ['verify'])

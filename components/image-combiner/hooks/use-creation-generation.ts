@@ -1,13 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useRef } from "react"
+import { useAccountVisible } from "@/components/account/account-visibility"
 import type { PublicModelCatalog } from "@/lib/provider-configuration-types"
 import { buildCreationRequest } from "@/lib/creation-request"
 import { PrivateWorkspaceError, requestPrivateRun } from "@/lib/private-workspace-client"
 import type { PrivateRun } from "@/lib/private-workspace-types"
 import type { CreativeWorkspaceController } from "./use-creative-workspace"
 
-interface RunningRequest { id: string; controller: AbortController; timer?: ReturnType<typeof setInterval> }
+interface RunningRequest { id: string; controller: AbortController; submitted?: boolean; timer?: ReturnType<typeof setInterval> }
 const ongoing = (run: PrivateRun) => ["preparing", "generating", "saving"].includes(run.status)
 function waitForPoll(signal: AbortSignal) {
   return new Promise<void>(resolve => {
@@ -20,10 +21,24 @@ function waitForPoll(signal: AbortSignal) {
 
 /** Each request captures a creation and draft revision before any asynchronous work. */
 export function useCreationGeneration(workspace: CreativeWorkspaceController, catalog: PublicModelCatalog, onToast: (message: string, type?: "success" | "error") => void) {
+  const accountVisible = useAccountVisible()
+  const visibleRef = useRef(accountVisible)
+  visibleRef.current = accountVisible
   const requests = useRef(new Map<string, RunningRequest>())
   const observed = useRef(new Set<string>())
   const mounted = useRef(true)
   const { getCreation, startGeneration, updateGeneration, failGeneration, ensureRemoteCreation, applyRun, markUnknown } = workspace
+  useEffect(() => {
+    if (!accountVisible) {
+      for (const [creationId, request] of requests.current) {
+        // AccountGate briefly hides the same mounted editor while checking its
+        // session. Aborting a submitted POST also cancels its model request.
+        if (request.submitted) continue
+        clearInterval(request.timer); request.controller.abort(); observed.current.delete(request.id)
+        requests.current.delete(creationId)
+      }
+    }
+  }, [accountVisible])
   useEffect(() => {
     mounted.current = true
     const running = requests.current
@@ -57,7 +72,7 @@ export function useCreationGeneration(workspace: CreativeWorkspaceController, ca
   }, [applyRun, markUnknown])
 
   const checkStatus = useCallback(async (creationId: string, id: string, repair = false) => {
-    if (requests.current.has(creationId)) return
+    if (!visibleRef.current || requests.current.has(creationId)) return
     const controller = new AbortController()
     requests.current.set(creationId, { id, controller })
     observed.current.add(id)
@@ -72,18 +87,19 @@ export function useCreationGeneration(workspace: CreativeWorkspaceController, ca
         : error instanceof Error ? error.message : "任务状态尚未确认，请稍后查看状态。"
       markUnknown(creationId, id, message)
       onToast(message, "error")
-    } finally { if (requests.current.get(creationId)?.id === id) requests.current.delete(creationId) }
+    } finally { if (requests.current.get(creationId)?.controller === controller) requests.current.delete(creationId) }
   }, [markUnknown, onToast, poll])
 
   useEffect(() => {
+    if (!accountVisible) return
     for (const creation of workspace.creations) {
       const pending = creation.versions.find(run => run.status === "loading" && run.runStatus)
       if (pending && !observed.current.has(pending.id) && !requests.current.has(creation.id)) void checkStatus(creation.id, pending.id)
     }
-  }, [workspace.creations, checkStatus])
+  }, [workspace.creations, checkStatus, accountVisible])
 
   const generate = useCallback(async (creationId: string) => {
-    if (requests.current.has(creationId)) return
+    if (!visibleRef.current || requests.current.has(creationId)) return
     const creation = getCreation(creationId)
     if (!creation) return
     let prepared: ReturnType<typeof buildCreationRequest>
@@ -94,11 +110,10 @@ export function useCreationGeneration(workspace: CreativeWorkspaceController, ca
     const request: RunningRequest = { id: generation.id, controller }
     requests.current.set(creationId, request)
     observed.current.add(generation.id)
-    let submitted = false
     try {
       await ensureRemoteCreation(creationId, generation.prompt)
       if (controller.signal.aborted || !mounted.current || !startGeneration(creationId, generation)) return
-      submitted = true
+      request.submitted = true
       const startedAt = Date.now()
       request.timer = setInterval(() => updateGeneration(creationId, generation.id, {
         progress: Math.min(92, 5 + 87 * (1 - Math.exp(-(Date.now() - startedAt) / 70_000))), phase: "generating",
@@ -109,14 +124,14 @@ export function useCreationGeneration(workspace: CreativeWorkspaceController, ca
     } catch (error) {
       if (controller.signal.aborted || !mounted.current) return
       const message = error instanceof Error ? error.message : "连接中断，生成结果尚未确认。请查看状态，勿重复提交。"
-      if (submitted) {
+      if (request.submitted) {
         if (error instanceof PrivateWorkspaceError && error.status >= 400 && error.status < 500) failGeneration(creationId, generation.id, message)
         else markUnknown(creationId, generation.id, message)
       }
       onToast(message, "error")
     } finally {
       clearInterval(request.timer)
-      if (requests.current.get(creationId)?.id === generation.id) requests.current.delete(creationId)
+      if (requests.current.get(creationId)?.controller === controller) requests.current.delete(creationId)
     }
   }, [catalog, getCreation, ensureRemoteCreation, startGeneration, updateGeneration, failGeneration, markUnknown, onToast, poll])
 

@@ -18,6 +18,8 @@ export interface Generation {
   id: string
   runStatus?: import("@/lib/private-workspace-types").PrivateRunStatus
   submittedDraftRevision?: number
+  submittedAnnotationRevision?: number
+  annotationSnapshot?: import("@/lib/image-annotations").AnnotationSnapshot | null
   quality?: Quality
   document?: { assetId: string; name: string }
   creationId?: string

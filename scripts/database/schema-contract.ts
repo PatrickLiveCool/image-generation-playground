@@ -6,7 +6,7 @@ type Table = { columns: readonly Column[]; primary: readonly string[]; unique?: 
 type ForeignKey = readonly [columns: readonly string[], target: string, targetColumns: readonly string[], onDelete?: "c"]
 const timestamp = "timestamp with time zone"
 
-// 固定来自已审核且不可改写的0001—0004，另含迁移运行器拥有的账本。
+// 固定来自已审核且不可改写的0001—0005，另含迁移运行器拥有的账本。
 // 不从数据库、归档、环境或SQL目录推导“应有”结构；新增迁移须同步人工审核此契约。
 const tables: Readonly<Record<string, Table>> = {
   schema_migrations: { columns: [["version", "text"], ["name", "text"], ["sha256", "text"], ["applied_at", timestamp]], primary: ["version"], unique: [["name"]] },
@@ -26,7 +26,7 @@ const tables: Readonly<Record<string, Table>> = {
   account_audit: { columns: [["id", "bigint", false, "a"], ["actorId", "text"], ["subjectId", "text"], ["action", "text"], ["createdAt", timestamp]],
     primary: ["id"], foreign: [[["actorId"], "user", ["id"]], [["subjectId"], "user", ["id"]]] },
   provider_settings: { columns: [["singleton", "smallint"], ["baseUrl", "text"], ["tokenCiphertext", "text"], ["apiMode", "text"], ["models", "jsonb"],
-    ["mappings", "jsonb"], ["modelsSynced", "boolean"], ["revision", "integer"], ["updatedBy", "text"], ["updatedAt", timestamp]],
+    ["mappings", "jsonb"], ["modelsSynced", "boolean"], ["revision", "integer"], ["updatedBy", "text"], ["updatedAt", timestamp], ["annotationCapabilities", "jsonb"]],
     primary: ["singleton"], foreign: [[["updatedBy"], "user", ["id"]]] },
   provider_config_audit: { columns: [["id", "bigint", false, "a"], ["actorId", "text"], ["revision", "integer"], ["action", "text"], ["createdAt", timestamp]],
     primary: ["id"], foreign: [[["actorId"], "user", ["id"]]] },
@@ -38,7 +38,8 @@ const tables: Readonly<Record<string, Table>> = {
     ["version", "integer"], ["parentVersionId", "uuid", true], ["status", "text"], ["prompt", "text"], ["mappingId", "text"], ["modelLabel", "text"],
     ["aspectRatio", "text"], ["quality", "text"], ["mode", "text"], ["providerBaseUrl", "text"], ["providerApiMode", "text"], ["providerModelId", "text"],
     ["providerRevision", "integer"], ["manifestKey", "text"], ["outputKey", "text"], ["outputAssetId", "uuid"], ["failureCode", "text", true],
-    ["createdAt", timestamp], ["updatedAt", timestamp], ["deadlineAt", timestamp]], primary: ["ownerId", "id"],
+    ["createdAt", timestamp], ["updatedAt", timestamp], ["deadlineAt", timestamp], ["annotationSnapshot", "jsonb", true],
+    ["annotationExecution", "jsonb", true], ["providerAnnotationCapability", "jsonb", true]], primary: ["ownerId", "id"],
     unique: [["ownerId", "clientRequestId"], ["ownerId", "creationId", "id"], ["ownerId", "creationId", "version"], ["ownerId", "outputAssetId"]],
     foreign: [[["ownerId", "creationId"], "creations", ["ownerId", "id"], "c"],
       [["ownerId", "creationId", "parentVersionId"], "generation_runs", ["ownerId", "creationId", "id"]],

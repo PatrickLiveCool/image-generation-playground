@@ -4,6 +4,7 @@ import Image from "next/image"
 import { Loader2, AlertCircle, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Generation } from "./types"
+import { AnnotationSnapshotPreview } from "./annotation-editor"
 
 export interface CreationHistoryProps {
   generations: Generation[]
@@ -53,6 +54,11 @@ export function CreationHistory({ generations, selectedId, pending, onSelect, on
               <p className="px-3 pb-2 text-[11px] text-gray-500">{[generation.aspectRatio, generation.quality, generation.document ? `文档：${generation.document.name}` : undefined].filter(Boolean).join(" · ")}</p>
               {generation.document && onDownloadDocument && <button type="button" onClick={() => onDownloadDocument(generation.document!)} className="mx-3 mb-3 rounded border border-white/20 px-2 py-1 text-xs text-gray-300 hover:bg-white/10">下载文档：{generation.document.name}</button>}
               <p className="select-text whitespace-pre-wrap break-words px-3 pb-3 text-xs leading-relaxed text-gray-400">{generation.prompt}</p>
+              {generation.annotationSnapshot && <div className="space-y-1 px-3 pb-3 text-xs leading-relaxed text-sky-100" aria-label={`${label} 的已提交批注`}>
+                <p className="text-gray-400">{parentLabel || "基础版本"} · 已提交的区域批注</p>
+                {generation.annotationSnapshot.marks.map(mark => <p key={mark.id} className="select-text whitespace-pre-wrap break-words">{mark.number}. {mark.instruction}</p>)}
+                <AnnotationSnapshotPreview snapshot={generation.annotationSnapshot} />
+              </div>}
               {generation.status === "error" && generation.error && <p className="px-3 pb-3 text-xs leading-relaxed text-amber-300">{generation.error}</p>}
             </article>
           )

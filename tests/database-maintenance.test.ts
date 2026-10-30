@@ -13,7 +13,7 @@ const environment = {
   PROVIDER_CONFIG_KEY: Buffer.alloc(32, 31).toString("base64"),
 }
 const release = () => ({ schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "a".repeat(40), platform: "linux/amd64",
-  builtAt: "2026-10-30T00:00:00.123456Z", browserWorkspaceSchema: 1, assetCapabilityVersion: 1,
+  builtAt: "2026-10-30T00:00:00.123456Z", browserWorkspaceSchema: 2, assetCapabilityVersion: 1,
   databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: maintenanceDatabaseContract() })
 
 function identity(purpose: DatabasePurpose) {
@@ -25,7 +25,7 @@ function identity(purpose: DatabasePurpose) {
     can_create_outside_schema: false, can_write_outside_schema: false, can_write_sequences_outside_schema: false,
     unexpected_object_owner: false, runtime_table_permissions_invalid: false, runtime_sequence_permissions_invalid: false, runtime_can_access_ledger: false }
 }
-async function fixture(prefix = 4) {
+async function fixture(prefix = 5) {
   const migrations = await loadMigrations()
   const state = {
     ledger: migrations.slice(0, prefix).map(({ version, name, sha256 }) => ({ version, name, sha256 })),
@@ -87,7 +87,7 @@ test("artifact and both identities/secrets are validated before any connection",
   for (const changed of [
     { ...release(), schema: 1 }, { ...release(), assetAccessProtocol: "bearer-v1" },
     { ...release(), database: { ...maintenanceDatabaseContract(), name: "other_app" } },
-    { ...release(), database: { ...maintenanceDatabaseContract(), maxVersion: "0005" } },
+    { ...release(), database: { ...maintenanceDatabaseContract(), maxVersion: "0006" } },
     { ...release(), database: { ...maintenanceDatabaseContract(), migrations: maintenanceDatabaseContract().migrations.slice(1) } },
     { ...release(), directory: "/tmp/untrusted" },
   ]) {
@@ -99,16 +99,16 @@ test("artifact and both identities/secrets are validated before any connection",
 })
 
 test("read-only preflight reports known pending prefixes; verify requires the complete contract", async () => {
-  for (const prefix of [0, 1, 2, 4]) {
+  for (const prefix of [0, 1, 2, 4, 5]) {
     const f = await fixture(prefix), result = await runMaintenance("preflight", environment, f.dependencies)
     assert.ok("pending" in result)
     assert.deepEqual(result.pending, f.migrations.slice(prefix).map(item => item.name))
-    assert.equal(result.compatible, prefix === 4)
-    assert.equal(f.state.schemaChecks, prefix === 4 ? 1 : 0)
+    assert.equal(result.compatible, prefix === 5)
+    assert.equal(f.state.schemaChecks, prefix === 5 ? 1 : 0)
     assert.equal(f.state.maximum, 1)
     assert.ok(f.events.indexOf("end:runtime") < f.events.indexOf("connect:migration"))
     assert.equal(mutations(f.sql).length, 0)
-    if (prefix < 4) await assert.rejects(runMaintenance("verify", environment, f.dependencies), /审核迁移版本/)
+    if (prefix < 5) await assert.rejects(runMaintenance("verify", environment, f.dependencies), /审核迁移版本/)
     else {
       const verified = await runMaintenance("verify", environment, f.dependencies)
       assert.equal("compatible" in verified && verified.compatible, true)

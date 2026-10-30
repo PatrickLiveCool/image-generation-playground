@@ -9,11 +9,12 @@ import { bootstrapAdministrator, changePassword, createAccount } from "../lib/au
 import { handleAuthRequest } from "../lib/auth/http"
 import { AccountError } from "../lib/auth/errors"
 import { closeDatabase, getDatabase } from "../lib/database"
-import { readAdminProvider, saveAdminProvider, syncAdminProvider, readPublicModelCatalog, resolveGenerationProvider, MAX_PROVIDER_JSON_BYTES } from "../lib/provider-configuration"
+import { readAdminProvider, saveAdminProvider, syncAdminProvider, readPublicModelCatalog, resolveGenerationProvider, recordAdminAnnotationCapability, disableAdminAnnotationCapability, MAX_PROVIDER_JSON_BYTES } from "../lib/provider-configuration"
 import { decryptProviderSecret } from "../lib/provider-secret"
 import { GET as adminGet, PUT as adminPut } from "../app/api/admin/provider/route"
 import { POST as syncPost } from "../app/api/provider/models/route"
 import { GET as catalogGet } from "../app/api/models/route"
+import { POST as annotationPost, DELETE as annotationDelete } from "../app/api/admin/provider/annotation-capabilities/route"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
 
 const testUrl = process.env.IMAGE_PROVIDER_TEST_DATABASE_URL
@@ -48,12 +49,13 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
   const pool = await getDatabase()
   async function deleteRows(sql: string) { await assertAccountTestFixture(pool); await pool.query(sql) }
   async function cleanup() {
-    await deleteRows("DELETE FROM app.provider_config_audit")
-    await deleteRows("DELETE FROM app.provider_settings")
-    await deleteRows("DELETE FROM app.account_audit")
-    await deleteRows('DELETE FROM app."user"')
-    await deleteRows('DELETE FROM app."rateLimit"')
-    await deleteRows("DELETE FROM app.verification")
+    await assertAccountTestFixture(pool)
+    const names = ["provider-admin-a", "provider-admin-b", "provider-user", "provider-temp", "provider-evidence-admin"]
+    const ids = 'SELECT id FROM app."user" WHERE username=ANY($1::text[])'
+    await pool.query('DELETE FROM app.provider_config_audit WHERE "actorId" IN (' + ids + ')', [names])
+    await pool.query('DELETE FROM app.provider_settings WHERE "updatedBy" IN (' + ids + ')', [names])
+    await pool.query('DELETE FROM app.account_audit WHERE "actorId" IN (' + ids + ') OR "subjectId" IN (' + ids + ')', [names])
+    await pool.query('DELETE FROM app."user" WHERE username=ANY($1::text[])', [names])
   }
   t.after(async () => { try { await cleanup() } finally { t.mock.restoreAll(); syncBuiltinESMExports(); await closeDatabase() } })
   await cleanup()
@@ -99,6 +101,8 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
       assert.equal((await adminGet(request("/api/admin/provider", null, headers, "GET"))).status, status)
       assert.equal((await adminPut(request("/api/admin/provider", configuration(), headers, "PUT"))).status, status)
       assert.equal((await syncPost(request("/api/provider/models", { revision: 0, ...settings }, headers))).status, status)
+      assert.equal((await annotationPost(request("/api/admin/provider/annotation-capabilities", {}, headers))).status, status)
+      assert.equal((await annotationDelete(request("/api/admin/provider/annotation-capabilities", {}, headers, "DELETE"))).status, status)
     }
     assert.equal((await catalogGet(request("/api/models", null, tempHeaders, "GET"))).status, 403)
     for (const endpoint of ["/api/admin/provider", "/api/provider/models"]) {
@@ -106,6 +110,10 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
       cross.headers.set("origin", "https://untrusted.example")
       assert.equal((await (endpoint.includes("admin") ? adminPut(cross) : syncPost(cross))).status, 403)
     }
+    const crossAnnotation = request("/api/admin/provider/annotation-capabilities", {}, admin)
+    crossAnnotation.headers.set("origin", "https://untrusted.example")
+    assert.equal((await annotationPost(crossAnnotation)).status, 403)
+    assert.equal((await annotationDelete(new Request(crossAnnotation.url, { method: "DELETE", headers: crossAnnotation.headers, body: "{}" }))).status, 403)
     await assert.rejects(saveAdminProvider(admin, configuration(0, "")), expectCode("INVALID_INPUT"))
     assert.equal(outbound.length, 0)
     assert.equal(dnsMock.mock.callCount(), 0)
@@ -132,7 +140,7 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
   await t.test("安全目录仅含名称和比例，生成解析仅服务端含真实模型及密钥", async () => {
     const catalog = await readPublicModelCatalog(user.headers)
     assert.equal(catalog.configured, true)
-    assert.deepEqual(Object.keys(catalog.mappings[0]).sort(), ["aspectRatios", "id", "name"])
+    assert.deepEqual(Object.keys(catalog.mappings[0]).sort(), ["annotation", "aspectRatios", "id", "name"])
     assert.deepEqual(catalog.mappings[0].aspectRatios, ["square", "3:2", "2:3"])
     assert.doesNotMatch(JSON.stringify(catalog), /synthetic-upstream|synthetic-provider|gpt-image|apiKey|baseUrl|modelId/)
     const resolved = await resolveGenerationProvider(user.headers, "mapping-a")
@@ -250,5 +258,124 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
     assert.equal((await readPublicModelCatalog(user.headers)).configured, false)
     await assert.rejects(resolveGenerationProvider(user.headers, "mapping-a"), expectCode("MODEL_MAPPING_NOT_FOUND"))
     assert.deepEqual((await pool.query("SELECT revision FROM app.provider_config_audit ORDER BY revision")).rows, [{ revision: 1 }, { revision: 2 }, { revision: 3 }])
+  })
+
+  await t.test("独立能力记录绑定已保存配置，并发revision、资料确认和公开投影均核验", async () => {
+    const calls = outbound.length, lookups = dnsMock.mock.callCount()
+    let view = await saveAdminProvider(admin, { ...configuration(3, ""), mappings: [configuration().mappings[0], { id: "mapping-b", name: "辅助", modelId: "synthetic-other-model" }] })
+    const evidence = (mappingId = "mapping-a") => ({ revision: view.revision, mappingId, evidenceReference: "https://docs.example/two-image-inputs", evidenceNote: "合成资料仅确认输入契约，不证明真实编辑效果。", confirmed: true })
+    const before = await snapshot()
+    for (const invalid of [{ ...evidence(), confirmed: false }, { ...evidence(), evidenceReference: "http://docs.example" }, { ...evidence(), evidenceNote: "" }, { ...evidence(), settings }, { ...evidence(), revision: view.revision - 1 }]) {
+      const response = await annotationPost(request("/api/admin/provider/annotation-capabilities", invalid, admin))
+      assert.ok(response.status === 400 || response.status === 409)
+    }
+    assert.deepEqual(await snapshot(), before)
+    const results = await Promise.allSettled([recordAdminAnnotationCapability(admin, evidence()), recordAdminAnnotationCapability(adminB.headers, evidence())])
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
+    assert.equal(results.filter(result => result.status === "rejected" && expectCode("PROVIDER_REVISION_CONFLICT")(result.reason)).length, 1)
+    view = await readAdminProvider(admin)
+    const first = view.annotationCapabilities[0]
+    assert.equal(first.mappingId, "mapping-a")
+    assert.equal(first.configurationRevision, view.revision)
+    assert.ok(first.evidence.actorId)
+    const response = await annotationPost(request("/api/admin/provider/annotation-capabilities", evidence("mapping-b"), admin))
+    assert.equal(response.status, 200, await response.clone().text())
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    view = await response.json()
+    assert.equal(view.annotationCapabilities.length, 2)
+    assert.deepEqual(view.annotationCapabilities.find(item => item.mappingId === "mapping-a")!.evidence, first.evidence)
+    assert.ok(view.annotationCapabilities.every(item => item.configurationRevision === view.revision))
+    const catalog = await readPublicModelCatalog(user.headers)
+    assert.deepEqual(catalog.mappings[0].annotation, { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null })
+    assert.doesNotMatch(JSON.stringify(catalog), /docs\.example|合成资料|bindingSha256|evidenceSha256|actorId|recordedAt|gpt-image|synthetic-upstream|synthetic-provider/)
+    const resolved = await resolveGenerationProvider(user.headers, "mapping-a")
+    assert.deepEqual(Object.keys(resolved.annotationCapability!).sort(), ["bindingSha256", "configurationRevision", "evidenceSha256", "expression", "maxInputImages", "sourceEvidence"])
+    assert.deepEqual(resolved.annotationCapability!.sourceEvidence, { mappingId: "mapping-a", evidence: first.evidence })
+    const priorEvidence = view.annotationCapabilities.map(item => item.evidence)
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: [...view.mappings].reverse().map(item => ({ ...item, name: item.name + "新名称" })) })
+    assert.deepEqual(view.annotationCapabilities.map(item => item.evidence), priorEvidence)
+    assert.ok(view.annotationCapabilities.every(item => item.configurationRevision === view.revision))
+    assert.equal(view.annotationCapabilities[0].evidenceSha256, first.evidenceSha256)
+    // Entering the same Token does not change its identity, even though AES-GCM uses a fresh nonce.
+    view = await saveAdminProvider(admin, { ...configuration(view.revision), mappings: view.mappings })
+    assert.equal(view.annotationCapabilities.length, 2)
+    // Changing only one actual model preserves the other mapping's evidence.
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: view.mappings.map(item => item.id === "mapping-b" ? { ...item, modelId: "synthetic-rebound-model" } : item) })
+    assert.deepEqual(view.annotationCapabilities.map(item => item.mappingId), ["mapping-a"])
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-replaced-token"), mappings: view.mappings })
+    assert.deepEqual(view.annotationCapabilities, [])
+    assert.equal((await readPublicModelCatalog(user.headers)).mappings[0].annotation.available, false)
+    for (const change of ["apiMode", "baseUrl", "delete"] as const) {
+      view = await recordAdminAnnotationCapability(admin, evidence())
+      const nextSettings = { ...view.settings, apiKey: "" }
+      if (change === "apiMode") nextSettings.apiMode = "chat"
+      if (change === "baseUrl") { nextSettings.baseUrl = "https://other-synthetic.example/v1"; nextSettings.apiKey = "synthetic-new-address-token" }
+      view = await saveAdminProvider(admin, { revision: view.revision, settings: nextSettings, models: view.models, modelsSynced: view.modelsSynced, mappings: change === "delete" ? [] : view.mappings })
+      assert.deepEqual(view.annotationCapabilities, [], `${change} must invalidate the prior binding`)
+    }
+    assert.equal(outbound.length, calls, "记录/继承/失效均不调用模型或同步目录")
+    assert.equal(dnsMock.mock.callCount(), lookups)
+  })
+
+  await t.test("能力记录事务复核等待期间撤销角色或会话不会写入证据", async () => {
+    let view = await readAdminProvider(admin)
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-last-token") })
+    const actor = await permanent("provider-evidence-admin", "admin")
+    for (const change of ["role", "session"] as const) {
+      const before = await snapshot()
+      const blocker = await pool.connect()
+      try {
+        await blocker.query("BEGIN")
+        await blocker.query('SELECT id FROM app."user" WHERE id=$1 FOR UPDATE', [actor.id])
+        const pending = recordAdminAnnotationCapability(actor.headers, { revision: view.revision, mappingId: "mapping-a", evidenceReference: "https://docs.example", evidenceNote: "仅用于事务撤权测试。", confirmed: true })
+        const assertion = assert.rejects(pending, expectCode(change === "role" ? "FORBIDDEN" : "UNAUTHENTICATED"))
+        let waiting = false
+        for (let index = 0; index < 100; index++) {
+          const state = await pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE $1", ['SELECT id,username,name,role,banned,%FROM app."user" WHERE id=$1 FOR UPDATE'])
+          if (state.rowCount) { waiting = true; break }
+          await delay(10)
+        }
+        assert.equal(waiting, true)
+        if (change === "role") await blocker.query('UPDATE app."user" SET role=$1 WHERE id=$2', ["user", actor.id])
+        else { await assertAccountTestFixture(pool); await blocker.query('DELETE FROM app.session WHERE "userId"=$1', [actor.id]) }
+        await blocker.query("COMMIT")
+        await assertion
+      } finally { await blocker.query("ROLLBACK"); blocker.release() }
+      assert.deepEqual(await snapshot(), before)
+      await pool.query('UPDATE app."user" SET role=$1 WHERE id=$2', ["admin", actor.id])
+      actor.headers = await login("provider-evidence-admin", password)
+    }
+  })
+
+  await t.test("独立停用受revision保护，仅移除选中能力并续用其他证据，普通生成保持可用", async () => {
+    let view = await readAdminProvider(admin)
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: [configuration().mappings[0], { id: "mapping-b", name: "第二映射", modelId: "synthetic-second-model" }] })
+    for (const mappingId of ["mapping-a", "mapping-b"]) view = await recordAdminAnnotationCapability(admin, { revision: view.revision, mappingId, evidenceReference: "https://synthetic.example/disable-test", evidenceNote: "独立停用边界合成证据", confirmed: true })
+    const before = await snapshot(), second = structuredClone(view.annotationCapabilities.find(item => item.mappingId === "mapping-b")!)
+    const calls = outbound.length, lookups = dnsMock.mock.callCount()
+    await assert.rejects(disableAdminAnnotationCapability(admin, { revision: view.revision - 1, mappingId: "mapping-a" }), expectCode("PROVIDER_REVISION_CONFLICT"))
+    await assert.rejects(disableAdminAnnotationCapability(admin, { revision: view.revision, mappingId: "removed" }), expectCode("MODEL_MAPPING_NOT_FOUND"))
+    for (const [headers, status] of [[new Headers(), 401], [user.headers, 403], [tempHeaders, 403]] as const) {
+      assert.equal((await annotationDelete(request("/api/admin/provider/annotation-capabilities", { revision: view.revision, mappingId: "mapping-a" }, headers, "DELETE"))).status, status)
+    }
+    assert.deepEqual(await snapshot(), before)
+    const results = await Promise.allSettled([disableAdminAnnotationCapability(admin, { revision: view.revision, mappingId: "mapping-a" }), disableAdminAnnotationCapability(adminB.headers, { revision: view.revision, mappingId: "mapping-a" })])
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
+    assert.equal(results.filter(result => result.status === "rejected" && expectCode("PROVIDER_REVISION_CONFLICT")(result.reason)).length, 1)
+    view = await readAdminProvider(admin)
+    assert.equal(view.revision, before[0].revision + 1)
+    assert.deepEqual(view.annotationCapabilities, [{ ...second, configurationRevision: view.revision }])
+    const after = (await snapshot())[0]
+    for (const field of ["baseUrl", "apiMode", "tokenCiphertext", "models", "mappings", "modelsSynced"]) assert.deepEqual(after[field], before[0][field])
+    const ordinary = await resolveGenerationProvider(user.headers, "mapping-a")
+    assert.ok(ordinary.settings.apiKey)
+    assert.equal(ordinary.mapping.modelId, actualModelId)
+    assert.equal(ordinary.annotationCapability, null)
+    const catalog = await readPublicModelCatalog(user.headers)
+    assert.equal(catalog.configured, true)
+    assert.equal(catalog.mappings[0].annotation.available, false)
+    assert.equal(catalog.mappings[1].annotation.available, true)
+    assert.equal(outbound.length, calls)
+    assert.equal(dnsMock.mock.callCount(), lookups)
   })
 })

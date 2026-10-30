@@ -38,6 +38,7 @@ const configuration: AdminProviderConfiguration = {
   revision: 4,
   settings: { baseUrl: "https://relay.example/v1", apiKey: "", apiMode: "images" },
   secretConfigured: true,
+  annotationCapabilities: [],
   models: [{ id: "image-a" }, { id: "image-b" }], modelsSynced: true,
   mappings: [{ id: "a", name: "极致", modelId: "image-a" }, { id: "b", name: "均衡", modelId: "image-b" }],
 }
@@ -102,13 +103,14 @@ async function type(id: string, value: string) {
 }
 async function mode(value: "chat" | "images") {
   await flush(() => {
-    const element = win.document.querySelector("select")!
+    const element = win.document.getElementById("provider-api-mode")!
+    assert.ok(element instanceof win.HTMLSelectElement)
     element.value = value
     element.dispatchEvent(new win.Event("change", { bubbles: true }))
   })
 }
 async function submit() {
-  await flush(() => win.document.querySelector("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })))
+  await flush(() => win.document.querySelector('[role="dialog"] form')!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })))
 }
 const models = () => [...win.document.querySelectorAll("datalist option")].map((option) => option.getAttribute("value"))
 const mappingOrder = () => [...win.document.querySelectorAll("[data-mapping-id]")].map((element) => element.getAttribute("data-mapping-id"))
@@ -141,7 +143,7 @@ test("同地址空 Token 保存携带 revision；服务器确认前不关闭且�
   await type("mapping-a-name", "清晰")
   await submit()
   assert.ok(win.document.querySelector('[role="dialog"]'))
-  assert.equal(win.document.querySelector("fieldset")!.disabled, true)
+  assert.equal(win.document.querySelector('[role="dialog"]')!.querySelector("fieldset")!.disabled, true)
   await submit()
   assert.equal(requests.length, 2)
   const body = JSON.parse(requests[1].init.body as string)
@@ -166,7 +168,7 @@ test("保存失败保留输入和映射，允许继续编辑后显式保存", as
   assert.ok(win.document.querySelector('[role="dialog"]'))
   assert.equal(input("provider-token").value, "synthetic-secret")
   assert.equal(input("mapping-a-name").value, "第一次草稿")
-  assert.equal(win.document.querySelector("fieldset")!.disabled, false)
+  assert.equal(win.document.querySelector('[role="dialog"]')!.querySelector("fieldset")!.disabled, false)
   assert.match(win.document.body.textContent, /合成校验失败/)
   await type("mapping-a-name", "第二次草稿")
   await submit()
@@ -392,15 +394,124 @@ test("保存超时覆盖完整响应正文，超时后迟到成功响应也不�
   await type("mapping-a-name", "等待确认的名称")
   context.mock.timers.enable({ apis: ["setTimeout"] })
   await submit()
-  assert.equal(win.document.querySelector("fieldset")!.disabled, true)
+  assert.equal(win.document.querySelector('[role="dialog"]')!.querySelector("fieldset")!.disabled, true)
   await flush(() => context.mock.timers.tick(15_000))
   assert.match(win.document.body.textContent, /请求超时/)
   assert.equal(requests[1].init.signal!.aborted, true)
-  assert.equal(win.document.querySelector("fieldset")!.disabled, false)
+  assert.equal(win.document.querySelector('[role="dialog"]')!.querySelector("fieldset")!.disabled, false)
   assert.equal(input("mapping-a-name").value, "等待确认的名称")
   assert.equal(button("保存配置").disabled, true)
   await flush(() => body.resolve({ ...configuration, revision: 5 }))
   assert.ok(win.document.querySelector('[role="dialog"]'))
   assert.equal(input("mapping-a-name").value, "等待确认的名称")
   assert.equal(requests.length, 2)
+})
+
+async function fillEvidence() {
+  await type("provider-annotation-reference", "https://docs.example/two-images")
+  await flush(() => {
+    const textarea = win.document.getElementById("provider-annotation-note")!
+    Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "已核对当前连接、接口、实际模型及 Token 权限的双图输入契约。")
+    textarea.dispatchEvent(new win.Event("input", { bubbles: true }))
+  })
+  await flush(() => {
+    const checkbox = win.document.querySelector('form[aria-label="记录批注输入能力"] input[type="checkbox"]')!
+    assert.ok(checkbox instanceof win.HTMLInputElement)
+    checkbox.click()
+  })
+}
+async function submitEvidence() {
+  await flush(() => win.document.querySelector('form[aria-label="记录批注输入能力"]')!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })))
+}
+const recordedConfiguration = {
+  ...configuration, revision: 5, annotationCapabilities: [{ mappingId: "a", expression: "overlay-v1", maxInputImages: 2, configurationRevision: 5,
+    bindingSha256: "1".repeat(64), evidenceSha256: "2".repeat(64), evidence: { id: "11111111-1111-4111-8111-111111111111", actorId: "synthetic-admin", recordedAt: "2026-10-30T00:00:00.000Z", reference: "https://docs.example/two-images", note: "输入契约记录", confirmed: true } }],
+}
+
+test("批注能力只能针对已保存配置独立记录，不能在未保存设置中标为已核验", async context => {
+  const pending = deferred<Response>()
+  const requests = mockReplies(context, [read, () => pending.promise])
+  await mount(context)
+  assert.equal(win.document.querySelector('form[aria-label="记录批注输入能力"] fieldset')!.hasAttribute("disabled"), true)
+  await type("mapping-a-name", "未保存模型名")
+  await type("mapping-a-model", "unconfirmed-model")
+  await submitEvidence()
+  assert.equal(requests.length, 1)
+  assert.match(win.document.body.textContent, /先保存 API 设置/)
+  await flush(() => button("取消").click())
+  await fillEvidence()
+  await submitEvidence()
+  await submitEvidence()
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].path, "/api/admin/provider/annotation-capabilities")
+  assert.equal(requests[1].init.method, "POST")
+  const sent = JSON.parse(requests[1].init.body as string)
+  assert.deepEqual(Object.keys(sent).sort(), ["confirmed", "evidenceNote", "evidenceReference", "mappingId", "revision"])
+  assert.equal(sent.revision, 4)
+  assert.equal(sent.mappingId, "a")
+  assert.equal(sent.confirmed, true)
+  assert.equal(button("API 设置").disabled, true)
+  assert.equal(button("刷新").disabled, true)
+  await flush(() => pending.resolve(Response.json(recordedConfiguration)))
+  assert.match(win.document.body.textContent, /极致：已记录双图输入契约/)
+  assert.match(win.document.body.textContent, /未调用模型，真实编辑效果仍需另行验收/)
+  assert.equal(input("provider-annotation-reference").value, "")
+  assert.equal(win.localStorage.length, 0)
+})
+
+test("证据记录结果不明时保留输入并要求只读核对，不自动重发", async context => {
+  const requests = mockReplies(context, [read, () => { throw new Error("synthetic lost response") }, () => Response.json(recordedConfiguration)])
+  await mount(context, { open: false })
+  await fillEvidence()
+  await submitEvidence()
+  assert.match(win.document.body.textContent, /结果尚未确认/)
+  assert.equal(input("provider-annotation-reference").value, "https://docs.example/two-images")
+  assert.equal(win.document.querySelector('form[aria-label="记录批注输入能力"] fieldset')!.hasAttribute("disabled"), true)
+  await submitEvidence()
+  assert.equal(requests.length, 2)
+  await flush(() => button("刷新").click())
+  assert.match(win.document.body.textContent, /极致：已记录双图输入契约/)
+  assert.equal(requests.filter(request => request.init.method === "POST").length, 1)
+  assert.equal(button("记录输入契约").disabled, true, "读取新配置后须重新明确确认")
+})
+
+test("独立停用按钮可键盘聚焦且仅提交已保存revision，保留普通配置与公开状态", async context => {
+  const pending = deferred<Response>()
+  const requests = mockReplies(context, [() => Response.json(recordedConfiguration), () => pending.promise])
+  await mount(context, { open: false })
+  const disable = button("停用批注能力")
+  assert.equal(disable.getAttribute("type"), "button")
+  await flush(() => disable.focus())
+  assert.equal(win.document.activeElement, disable)
+  assert.equal(disable.getAttribute("aria-describedby"), "annotation-disable-help")
+  assert.match(win.document.getElementById("annotation-disable-help")!.textContent, /普通生成和已受理任务保留/)
+  await flush(() => disable.click())
+  await flush(() => disable.click())
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].init.method, "DELETE")
+  assert.deepEqual(JSON.parse(requests[1].init.body as string), { revision: 5, mappingId: "a" })
+  assert.equal(button("API 设置").disabled, true)
+  await flush(() => pending.resolve(Response.json({ ...recordedConfiguration, revision: 6, annotationCapabilities: [] })))
+  assert.match(win.document.body.textContent, /极致：未启用，批注不可用/)
+  assert.match(win.document.querySelector('[role="status"]')!.textContent, /普通生成仍可使用，已受理任务保留原能力证据/)
+  assert.equal([...win.document.querySelectorAll("button")].some(item => item.textContent === "停用批注能力"), false)
+  assert.match(win.document.body.textContent, /https:\/\/relay.example\/v1/)
+  assert.equal(button("API 设置").disabled, false)
+})
+
+test("停用冲突保留已知证据并禁用重试，刷新核对后才显示新状态", async context => {
+  const requests = mockReplies(context, [() => Response.json(recordedConfiguration),
+    () => Response.json({ error: { code: "PROVIDER_REVISION_CONFLICT", message: "配置版本已变更" } }, { status: 409 }),
+    () => Response.json({ ...recordedConfiguration, revision: 6, annotationCapabilities: [] }),
+  ])
+  await mount(context, { open: false })
+  await flush(() => button("停用批注能力").click())
+  assert.match(win.document.body.textContent, /配置版本已变更/)
+  assert.match(win.document.body.textContent, /当前证据 11111111/)
+  assert.equal(win.document.querySelector('form[aria-label="记录批注输入能力"] fieldset')!.hasAttribute("disabled"), true)
+  await flush(() => button("停用批注能力").click())
+  assert.equal(requests.length, 2)
+  await flush(() => button("刷新").click())
+  assert.match(win.document.body.textContent, /极致：未启用，批注不可用/)
+  assert.equal(requests.filter(item => item.init.method === "DELETE").length, 1)
 })

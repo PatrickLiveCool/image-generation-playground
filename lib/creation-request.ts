@@ -3,6 +3,7 @@ import type { Creation } from "./creation-types"
 import type { PublicModelCatalog } from "./provider-configuration-types"
 import { resolveModelMapping } from "./model-mappings"
 import { composePrompt, MAX_DOCUMENT_CHARS, validateDocumentFile } from "./document-context"
+import { composeAnnotatedPrompt, serializeAnnotationSnapshot, validateAnnotationSnapshot } from "./image-annotations"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024
@@ -33,8 +34,10 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
   if (creation.versions.some(version => version.id === generationId)) throw new Error("版本标识重复，请重新提交。")
   const documentName = draft.documentName ?? ""
   const documentText = draft.documentText ?? ""
-  const effectivePrompt = composePrompt(draft.prompt, documentName, documentText)
-  if (!draft.prompt.trim() || effectivePrompt.length > 5000) throw new Error(documentText.trim() ? "提示词和文档上下文合计不能超过 5000 字，请精简提示词或文档。" : "请输入提示词，最多 5000 字。")
+  const annotationDraft = creation.selectedVersionId ? draft.annotationDrafts?.[creation.selectedVersionId] : undefined
+  const annotationSnapshot = annotationDraft?.snapshot.marks.length ? validateAnnotationSnapshot(annotationDraft.snapshot) : null
+  const effectivePrompt = composePrompt(annotationSnapshot ? composeAnnotatedPrompt(draft.prompt, annotationSnapshot) : draft.prompt, documentName, documentText)
+  if ((!draft.prompt.trim() && !annotationSnapshot) || effectivePrompt.length > 5000) throw new Error(documentText.trim() || annotationSnapshot ? "提示词、批注和文档上下文合计不能超过 5000 字，请精简内容。" : "请输入提示词，最多 5000 字。")
   if (documentText.length > MAX_DOCUMENT_CHARS) throw new Error(`文档文字不能超过 ${MAX_DOCUMENT_CHARS} 个字符，请重新上传精简后的文档。`)
   if (draft.documentFile) validateDocumentFile(draft.documentFile)
 
@@ -61,6 +64,12 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
     throw new Error("文件与链接中都有参考图，请先清空另一种输入方式中的参考图后提交。")
   }
   const references = draft.useUrls ? urls : files
+  if (annotationSnapshot) {
+    if (!base || annotationSnapshot.baseVersionId !== base.id || base.imageUrl !== `/api/images/${annotationSnapshot.image.assetId}`) throw new Error("批注基准与当前图片不匹配，请重新选择基础版本。")
+    if (!mapping.annotation?.available || mapping.annotation.expression !== "overlay-v1") throw new Error(mapping.annotation?.reason || "当前模型尚未确认支持区域批注，请更换模型或联系管理员记录能力。")
+    if (references.length) throw new Error("区域批注已使用原图与标注图两个输入，请移除补充参考图后提交。")
+    if ((draft.documentFile || documentText.trim()) && draft.documentImageInspection !== "none") throw new Error("区域批注仅支持已确认无图片的文档，请改用纯 TXT 或移除文档。")
+  }
   if (base && references.length > 1) throw new Error("继续修改时最多添加一张补充参考图，请移除多余参考图。")
   for (const file of files) {
     if (!(file instanceof File) || !file.size || file.size > MAX_REFERENCE_BYTES) throw new Error("参考图片不能为空，且单张不能超过 10 MB。")
@@ -79,6 +88,7 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
   if (base?.imageUrl) {
     formData.set("parentVersionId", base.id)
   }
+  if (annotationSnapshot) formData.set("annotationSnapshot", serializeAnnotationSnapshot(annotationSnapshot))
   references.forEach((reference, index) => {
     if (typeof reference === "string") formData.set(`image${index + 1}Url`, reference)
     else formData.set(`image${index + 1}`, reference)
@@ -93,6 +103,7 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
   const generation: Generation = {
     id: generationId, creationId: creation.id, version, parentVersionId: base?.id ?? null,
     runStatus: "preparing", submittedDraftRevision: creation.draftRevision, quality: draft.quality,
+    annotationSnapshot, ...(annotationSnapshot ? { submittedAnnotationRevision: annotationDraft!.revision } : {}),
     model: mapping.id, modelLabel: mapping.name, status: "loading", progress: 0, phase: "sending",
     imageUrl: null, prompt: draft.prompt, timestamp: now, aspectRatio: draft.aspectRatio, mode,
   }

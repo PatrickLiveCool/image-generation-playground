@@ -7,6 +7,7 @@ import { Window } from "happy-dom"
 import { act } from "react"
 import type { Root } from "react-dom/client"
 import { addCreation, emptyWorkspace, newCreation, readWorkspace, restoreWorkspace, writeWorkspace } from "../lib/creative-workspace"
+import { publicAnnotationCapability } from "../lib/annotation-capability"
 import type { PublicModelCatalog } from "../lib/provider-configuration-types"
 
 const win = new Window({ url: "http://localhost:3000" })
@@ -52,9 +53,9 @@ after(async () => {
 const catalog: PublicModelCatalog = {
   revision: 1, configured: true, apiMode: "images",
   mappings: [
-    { id: "mapping-a", name: "模型 A", aspectRatios: ["square", "3:2", "2:3"] },
-    { id: "mapping-b", name: "模型 B", aspectRatios: ["square", "landscape", "3:2"] },
-    { id: "mapping-c", name: "模型 C", aspectRatios: ["square", "2:3"] },
+    { id: "mapping-a", name: "模型 A", aspectRatios: ["square", "3:2", "2:3"], annotation: publicAnnotationCapability(null) },
+    { id: "mapping-b", name: "模型 B", aspectRatios: ["square", "landscape", "3:2"], annotation: publicAnnotationCapability(null) },
+    { id: "mapping-c", name: "模型 C", aspectRatios: ["square", "2:3"], annotation: publicAnnotationCapability(null) },
   ],
 }
 
