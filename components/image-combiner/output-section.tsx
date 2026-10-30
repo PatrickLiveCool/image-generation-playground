@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useEffect, useCallback, useState } from "react"
+import { memo, useEffect, useCallback, useState, type ReactNode } from "react"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -25,6 +25,8 @@ interface OutputSectionProps {
   onOpenInNewTab: () => void
   onImageReady: (id: string) => void
   onImageError: (id: string) => void
+  annotationTools?: ReactNode
+  annotationOverlay?: ReactNode
 }
 
 const ActionButtons = memo(function ActionButtons({ onCopy, onDownload, pinned, onTogglePin }: {
@@ -42,7 +44,7 @@ const ActionButtons = memo(function ActionButtons({ onCopy, onDownload, pinned, 
 
 export const OutputSection = memo(function OutputSection({
   selectedGeneration, pendingGeneration, generations, selectedGenerationId, setSelectedGenerationId,
-  setImageLoaded, onCancelGeneration, onOpenFullscreen, onCopy, onDownload, onImageError,
+  setImageLoaded, onCancelGeneration, onOpenFullscreen, onCopy, onDownload, onImageError, annotationTools, annotationOverlay,
 }: OutputSectionProps) {
   const [pinned, setPinned] = useState(false)
   const [loadError, setLoadError] = useState(false)
@@ -63,6 +65,7 @@ export const OutputSection = memo(function OutputSection({
     if (pendingGeneration) return
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = document.activeElement
+      if (event.defaultPrevented || (target instanceof Element && target.closest("[data-annotation-canvas]"))) return
       if (target instanceof HTMLElement && (target.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(target.tagName))) return
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
       const completeVersions = generations.filter(generation => generation.status === "complete" && generation.imageUrl)
@@ -80,6 +83,7 @@ export const OutputSection = memo(function OutputSection({
 
   const imageLoadFailed = () => {
     setLoadError(true)
+    setImageLoaded(false)
     if (selectedGeneration) onImageError(selectedGeneration.id)
   }
   const reloadImage = () => { setLoadError(false); setReloadNonce(value => value + 1) }
@@ -90,11 +94,13 @@ export const OutputSection = memo(function OutputSection({
         <p className="text-sm font-medium text-gray-300">{complete ? `当前图片 · V${selectedGeneration?.version ?? 1}` : "图片预览"}</p>
         {complete && !pendingGeneration && <p className="text-[11px] text-gray-500">下一轮将修改这张图</p>}
       </div>
+      {annotationTools}
       <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-md border border-white/10 bg-black/20">
         {imageUrl ? (
           <>
             {imageUrl.startsWith("data:") ? <img key={`${selectedGeneration?.id}-${reloadNonce}`} src={imageUrl} alt={`V${selectedGeneration?.version ?? 1}：${selectedGeneration?.prompt ?? "生成结果"}`} className="absolute inset-0 h-full w-full cursor-pointer object-contain" onLoad={() => { setImageLoaded(true); setLoadError(false) }} onError={imageLoadFailed} onClick={complete ? onOpenFullscreen : undefined} /> : <Image key={`${selectedGeneration?.id}-${reloadNonce}`} unoptimized src={imageUrl} alt={`V${selectedGeneration?.version ?? 1}：${selectedGeneration?.prompt ?? "生成结果"}`} fill priority sizes="(max-width: 1024px) 100vw, 55vw" className="cursor-pointer object-contain" onLoad={() => { setImageLoaded(true); setLoadError(false) }} onError={imageLoadFailed} onClick={complete ? onOpenFullscreen : undefined} />}
             {complete && !loadError && <div className={cn("absolute bottom-3 left-1/2 z-10 -translate-x-1/2 transition-all md:translate-y-2 md:opacity-0", pinned ? "md:translate-y-0 md:opacity-100" : "md:group-hover/output:translate-y-0 md:group-hover/output:opacity-100 md:focus-within:translate-y-0 md:focus-within:opacity-100")}><ActionButtons onCopy={onCopy} onDownload={onDownload} pinned={pinned} onTogglePin={togglePin} /></div>}
+            {!loadError && annotationOverlay}
             {loadError && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-5 text-center"><ImageIcon className="size-8 text-gray-500" /><p className="text-sm text-gray-300">图片暂时无法加载，版本已保留。</p><Button type="button" variant="outline" onClick={reloadImage} className="border-white/20 bg-transparent text-white hover:bg-white/10 hover:text-white"><RotateCw className="size-3.5" />重新加载图片</Button></div>}
           </>
         ) : <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center"><ImageIcon className="size-10 text-gray-600" /><p className="text-sm text-gray-400">{pendingGeneration ? "正在生成首版图片" : "描述你的画面，开始这项创作"}</p></div>}

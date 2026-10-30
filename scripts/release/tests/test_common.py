@@ -17,10 +17,12 @@ class CommonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             _bundle, manifest, _anchor = fixture_bundle(temporary, account=True)
             self.assertTrue(is_account_release(validate_manifest(manifest)))
+            self.assertEqual(manifest["browserWorkspaceSchema"], 2)
+            self.assertEqual(validate_manifest({**manifest, "browserWorkspaceSchema": 1})["browserWorkspaceSchema"], 1)
             self.assertNotIn("database", metadata_fields(1))
             self.assertIn("database", metadata_fields(2))
             for changes in ({"schema": 1}, {"databaseMode": "none"}, {"assetAccessProtocol": "public-bearer"},
-                            {"builtAt": "2026-02-30T00:00:00Z"}, {"builtAt": "2026-10-26T00:00:00+08:00"}):
+                            {"builtAt": "2026-02-30T00:00:00Z"}, {"builtAt": "2026-10-26T00:00:00+08:00"}, {"browserWorkspaceSchema": 3}):
                 with self.assertRaises(ReleaseError): validate_manifest({**manifest, **changes})
             for field, value in (("name", "another_project"), ("schema", "public"), ("maxVersion", "9999"), ("minVersion", "0000")):
                 with self.assertRaises(ReleaseError): validate_manifest({**manifest, "database": {**manifest["database"], field: value}})

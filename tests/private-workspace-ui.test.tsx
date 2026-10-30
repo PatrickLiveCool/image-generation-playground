@@ -33,8 +33,8 @@ after(async () => { decoration.deregister(); await win.happyDOM.close(); for (co
 const cid = "11111111-1111-4111-8111-111111111111"
 const rid = "22222222-2222-4222-8222-222222222222"
 const asset = "/api/images/33333333-3333-4333-8333-333333333333"
-const catalog = { revision: 4, configured: true, apiMode: "images", mappings: [{ id: "mapping-a", name: "共用模型", aspectRatios: ["square", "3:2"] }] }
-function run(patch: Partial<PrivateRun> = {}): PrivateRun { return { id: rid, creationId: cid, creationRevision: 7, version: 1, parentVersionId: null, status: "complete", imageUrl: asset, prompt: "首版提示", mappingId: "mapping-a", modelLabel: "共用模型", aspectRatio: "3:2", quality: "high", mode: "text-to-image", createdAt: 100, updatedAt: 101, ...patch } }
+const catalog = { revision: 4, configured: true, apiMode: "images", mappings: [{ id: "mapping-a", name: "共用模型", aspectRatios: ["square", "3:2"], annotation: { available: false, expression: null, maxInputImages: 2, reason: "尚未确认批注能力" } }] }
+function run(patch: Partial<PrivateRun> = {}): PrivateRun { return { id: rid, creationId: cid, creationRevision: 7, version: 1, parentVersionId: null, annotationSnapshot: null, status: "complete", imageUrl: asset, prompt: "首版提示", mappingId: "mapping-a", modelLabel: "共用模型", aspectRatio: "3:2", quality: "high", mode: "text-to-image", createdAt: 100, updatedAt: 101, ...patch } }
 function remote(versions: PrivateRun[] = [run()]): PrivateCreation { return { id: cid, title: "服务端创作", revision: 7, createdAt: 90, updatedAt: 110, versions } }
 async function flush(action?: () => void) { await act(async () => { action?.(); await new Promise<void>(resolve => setImmediate(resolve)) }) }
 async function eventually(check: () => void) { let failure: unknown; for (let i = 0; i < 100; i++) { try { await act(async () => { check() }); return } catch (error) { failure = error } await act(async () => { await delay(10) }) } throw failure }
@@ -44,7 +44,7 @@ async function typePrompt(text: string) { await flush(() => { const field = prom
 async function mount(t: TestContext, account: string) {
   const container = win.document.createElement("div"); win.document.body.append(container); const root: Root = createRoot(container as unknown as HTMLElement)
   t.after(async () => { await act(async () => root.unmount()); await delay(25); container.remove(); win.localStorage.clear(); win.sessionStorage.clear(); win.document.body.style.pointerEvents = "" })
-  await act(async () => root.render(<ImageCombiner accountId={account} />))
+  await act(async () => root.render(<AccountVisibilityContext.Provider value={true}><ImageCombiner accountId={account} /></AccountVisibilityContext.Provider>))
   await eventually(() => assert.ok(win.document.querySelector("textarea")))
   return root
 }
@@ -64,7 +64,7 @@ test("remote merge discards local successful history, preserves same-creation dr
 test("completion clears only the same submitted draft revision and unknown status leaves the base untouched", () => {
   const local = mergePrivateWorkspace(emptyWorkspace(), [remote()])
   let state = patchCreationDraft(local, cid, { prompt: "本轮提示" })
-  const pending = { ...privateRunGeneration(run({ id: "new-run", status: "generating", imageUrl: null })), submittedDraftRevision: state.creations[0].draftRevision }
+  const pending = { ...privateRunGeneration(run({ id: "new-run", parentVersionId: rid, status: "generating", imageUrl: null })), submittedDraftRevision: state.creations[0].draftRevision }
   state = startCreationGeneration(state, cid, pending)
   state = applyPrivateRun(state, run({ id: "new-run", status: "unknown", imageUrl: null, version: 2, parentVersionId: rid }))
   assert.equal(state.creations[0].selectedVersionId, rid); assert.equal(state.creations[0].draft.prompt, "本轮提示")
@@ -73,6 +73,153 @@ test("completion clears only the same submitted draft revision and unknown statu
   assert.equal(result.creations[0].draft.prompt, "新的未提交输入"); assert.equal(result.creations[0].selectedVersionId, "new-run")
   const unchanged = applyPrivateRun(state, run({ id: "new-run", version: 2, parentVersionId: rid }))
   assert.equal(unchanged.creations[0].draft.prompt, "")
+})
+
+test("switching accounts aborts the old generation and late results cannot enter the new editor", async t => {
+  const accountA = "annotation-account-a", accountB = "annotation-account-b"
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote()]); state.creations[0].draft.prompt = "账号 A 的私有修改"
+  await writeWorkspace(state, 0, "seed-account-a", accountA)
+  let currentAccount = accountA
+  let respond: ((value: Response) => void) | undefined, submittedId = "", signal: AbortSignal | null | undefined
+  const otherId = "55555555-5555-4555-8555-555555555555"
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: currentAccount === accountA ? [remote()] : [{ ...remote([]), id: otherId, title: "账号 B 创作" }] })
+    if (path === "/api/generate-image") { submittedId = String((init!.body as FormData).get("clientRequestId")); signal = init?.signal; return new Promise<Response>(resolve => { respond = resolve }) }
+    if (path.endsWith("/metadata")) return Response.json({ assetId: asset.split("/").at(-1), width: 400, height: 200, orientation: 1, pages: 1 })
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  const root = await mount(t, accountA)
+  await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(respond))
+  currentAccount = accountB
+  await act(async () => root.render(<ImageCombiner accountId={accountB} />))
+  await eventually(() => assert.ok(win.document.body.textContent.includes("账号 B 创作")))
+  assert.equal(signal?.aborted, true)
+  await typePrompt("账号 B 新输入")
+  await flush(() => respond!(Response.json({ run: run({ id: submittedId, version: 2, parentVersionId: rid }) })))
+  assert.equal(prompt().value, "账号 B 新输入")
+  assert.equal(win.document.querySelector(`[data-generation-id="${submittedId}"]`), null)
+  assert.equal(win.document.body.textContent.includes("账号 A 的私有修改"), false)
+})
+
+test("temporary same-account checks keep the submitted POST alive and never submit it twice", async t => {
+  const account = "same-account-post-preserved"
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote()]); state.creations[0].draft.prompt = "继续同一个任务"
+  await writeWorkspace(state, 0, "same-account-seed", account)
+  let submittedId = "", postCount = 0, workspaceReads = 0, getCount = 0
+  let respond: ((response: Response) => void) | undefined, signal: AbortSignal | null | undefined
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") { workspaceReads++; return Response.json({ creations: [remote()] }) }
+    if (path.endsWith("/metadata")) return Response.json({ assetId: asset.split("/").at(-1), width: 400, height: 200, orientation: 1, pages: 1 })
+    if (path === "/api/generate-image") { postCount++; submittedId = String((init!.body as FormData).get("clientRequestId")); signal = init?.signal; return new Promise<Response>(resolve => { respond = resolve }) }
+    if (path.startsWith("/api/runs/")) { getCount++; throw new Error("the submitted POST is still in flight") }
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  const root = await mount(t, account)
+  const visible = async (value: boolean) => { await act(async () => root.render(<AccountVisibilityContext.Provider value={value}><ImageCombiner accountId={account} /></AccountVisibilityContext.Provider>)) }
+  await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(respond))
+  await visible(false); assert.equal(signal?.aborted, false)
+  await visible(true); assert.equal(signal?.aborted, false)
+  assert.equal(button("生成中…").disabled, true)
+  await flush(() => button("生成中…").click())
+  assert.equal(postCount, 1); assert.equal(getCount, 0)
+  await visible(false); assert.equal(signal?.aborted, false)
+  await flush(() => respond!(Response.json({ run: run({ id: submittedId, parentVersionId: rid, version: 2 }) })))
+  await visible(true)
+  await eventually(() => assert.ok(win.document.querySelector('[aria-label="选择 V2"][aria-pressed="true"]')))
+  assert.equal(button("修改 V2").textContent, "修改 V2")
+  assert.equal(postCount, 1); assert.equal(getCount, 0)
+  assert.equal(workspaceReads, 1, "same account visibility must not remount the editor")
+})
+
+test("same-account status reads resume safely and an aborted controller cannot remove a newer read", async t => {
+  const account = "same-account-read-resume", pendingId = "66666666-6666-4666-8666-666666666666"
+  const pendingRun = run({ id: pendingId, parentVersionId: rid, version: 2, status: "generating", imageUrl: null })
+  const pending: { resolve: (response: Response) => void; signal?: AbortSignal | null }[] = []
+  let workspaceReads = 0
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") { workspaceReads++; return Response.json({ creations: [remote([pendingRun, run()])] }) }
+    if (path.endsWith("/metadata")) return Response.json({ assetId: asset.split("/").at(-1), width: 400, height: 200, orientation: 1, pages: 1 })
+    if (path === `/api/runs/${pendingId}`) { assert.equal(init?.method, undefined); return new Promise<Response>(resolve => pending.push({ resolve, signal: init?.signal })) }
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  const root = await mount(t, account)
+  const visible = async (value: boolean) => { await act(async () => root.render(<AccountVisibilityContext.Provider value={value}><ImageCombiner accountId={account} /></AccountVisibilityContext.Provider>)) }
+  await eventually(() => assert.equal(pending.length, 1))
+  await visible(false); assert.equal(pending[0].signal?.aborted, true)
+  await visible(true); await eventually(() => assert.equal(pending.length, 2))
+  const response = () => Response.json({ run: run({ id: pendingId, parentVersionId: rid, version: 2 }) })
+  await flush(() => pending[0].resolve(response()))
+  await visible(false); assert.equal(pending[1].signal?.aborted, true, "old read cleanup must retain the next controller")
+  await visible(true); await eventually(() => assert.equal(pending.length, 3))
+  await flush(() => pending[1].resolve(response()))
+  await flush(() => pending[2].resolve(response()))
+  await eventually(() => assert.ok(win.document.querySelector('[data-generation-id="66666666-6666-4666-8666-666666666666"] [aria-label="选择 V2"]')))
+  assert.equal(workspaceReads, 1)
+})
+
+test("the actual editor retries metadata and submits an annotation-only edit with the complete original-base snapshot", async t => {
+  const imageMetadata = { assetId: asset.split("/").at(-1)!, width: 400, height: 200, orientation: 1, pages: 1 }
+  let metadataReads = 0, submitted: FormData | undefined
+  const submittedForm = () => submitted!
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    if (path === "/api/models") return Response.json({ ...catalog, mappings: [{ ...catalog.mappings[0], annotation: { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null } }] })
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path === `${asset}/metadata`) { metadataReads++; return metadataReads === 1 ? Response.json({ error: { message: "读取暂时失败" } }, { status: 503 }) : Response.json(imageMetadata) }
+    if (path === "/api/generate-image") {
+      submitted = init!.body as FormData
+      return Response.json({ run: run({ id: String(submitted.get("clientRequestId")), parentVersionId: rid, version: 2, annotationSnapshot: JSON.parse(String(submitted.get("annotationSnapshot"))) }) })
+    }
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, "annotation-only-actual-editor")
+  const original = win.document.querySelector<InstanceType<typeof win.HTMLImageElement>>('img[alt^="V1："]')!
+  assert.ok(original)
+  Object.defineProperties(original, { naturalWidth: { configurable: true, value: 400 }, naturalHeight: { configurable: true, value: 200 }, decode: { configurable: true, value: async () => {} } })
+  await flush(() => original.dispatchEvent(new win.Event("load")))
+  await eventually(() => assert.ok(button("重新读取图片信息")))
+  assert.equal(button("添加中心区域").disabled, true)
+  await flush(() => button("重新读取图片信息").click())
+  await eventually(() => assert.equal(button("添加中心区域").disabled, false))
+  await flush(() => button("添加中心区域").click())
+  const instruction = win.document.querySelector('textarea[aria-label="批注 1 的说明"]')!
+  await flush(() => { Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(instruction, "只把该区域改成绿色"); instruction.dispatchEvent(new win.Event("input", { bubbles: true })) })
+  assert.equal(prompt().value, "")
+  assert.equal(button("修改 V1").disabled, false)
+  assert.equal(metadataReads, 2)
+  await flush(() => button("修改 V1").click())
+  await eventually(() => assert.ok(submittedForm()))
+  const form = submittedForm(), snapshot = JSON.parse(String(form.get("annotationSnapshot")))
+  assert.equal(form.get("parentVersionId"), rid); assert.equal(form.get("prompt"), "")
+  assert.match(snapshot.marks[0].id, /^[0-9a-f-]{36}$/)
+  assert.deepEqual(snapshot, { schema: 1, coordinateSpace: "encoded-pixels-v1", baseVersionId: rid, image: imageMetadata, marks: [{ id: snapshot.marks[0].id, number: 1, instruction: "只把该区域改成绿色", geometry: { type: "rectangle", x: 140, y: 70, width: 120, height: 60 } }] })
+  assert.equal(form.has("image1"), false); assert.equal(form.has("image1Url"), false)
+})
+
+test("late document previews do not restore an explicitly removed file", async t => {
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote()])
+  await writeWorkspace(state, 0, "seed-preview", "annotation-document-preview")
+  let respond: ((value: Response) => void) | undefined
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path === "/api/documents/preview") { assert.equal((init!.body as FormData).get("document") instanceof File, true); return new Promise<Response>(resolve => { respond = resolve }) }
+    if (path.endsWith("/metadata")) return Response.json({ assetId: asset.split("/").at(-1), width: 400, height: 200, orientation: 1, pages: 1 })
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, "annotation-document-preview")
+  const fileInput = win.document.querySelector<InstanceType<typeof win.HTMLInputElement>>("#creation-document")!
+  const file = new File(["纯文字内容"], "brief.txt", { type: "text/plain" })
+  Object.defineProperty(fileInput, "files", { configurable: true, value: [file] })
+  await flush(() => fileInput.dispatchEvent(new win.Event("change", { bubbles: true })))
+  await eventually(() => assert.ok(respond))
+  await flush(() => win.document.querySelector<InstanceType<typeof win.HTMLButtonElement>>('[aria-label="移除背景文档"]')!.click())
+  await flush(() => respond!(Response.json({ document: { name: "brief.txt", text: "纯文字内容", imageInspection: "none" } })))
+  assert.equal(win.document.querySelector('[aria-label="移除背景文档"]'), null)
+  assert.equal(win.document.body.textContent.includes("brief.txt"), false)
 })
 
 test("actual editor posts original parent and prompt, keeps another creation isolated, and accepts the server run response", async t => {
@@ -355,7 +502,7 @@ test("changing to an old base with the same ratio preserves input and selection 
   const older = run(); const newer = run({ id: "newer-base", version: 2, createdAt: 120 })
   let state = mergePrivateWorkspace(emptyWorkspace(), [remote([newer, older])])
   state = patchCreationDraft(state, cid, { prompt: "保持这份修改草稿" })
-  state = startCreationGeneration(state, cid, { ...privateRunGeneration(run({ id: "stopped", status: "generating", imageUrl: null })), submittedDraftRevision: state.creations[0].draftRevision })
+  state = startCreationGeneration(state, cid, { ...privateRunGeneration(run({ id: "stopped", parentVersionId: "newer-base", status: "generating", imageUrl: null })), submittedDraftRevision: state.creations[0].draftRevision })
   state = markPrivateRunUnknown(state, cid, "stopped", "已停止等待")
   const revision = state.creations[0].draftRevision
   state = selectCreationVersion(state, cid, rid)

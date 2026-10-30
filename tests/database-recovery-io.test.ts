@@ -19,7 +19,7 @@ const environment = { NODE_ENV: "test" as const, IMAGE_DATABASE_TARGET: "local",
   PROVIDER_CONFIG_KEY: Buffer.alloc(32, 61).toString("base64"), ASSET_ACCESS_SECRET: "synthetic-backup-asset-secret-32-characters",
   COS_BUCKET: "synthetic-private-1234567890", COS_REGION: "ap-shanghai" }
 const release = { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "a".repeat(40), platform: "linux/amd64",
-  builtAt: "2026-10-30T00:00:00Z", browserWorkspaceSchema: 1, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: maintenanceDatabaseContract() }
+  builtAt: "2026-10-30T00:00:00Z", browserWorkspaceSchema: 2, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: maintenanceDatabaseContract() }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`

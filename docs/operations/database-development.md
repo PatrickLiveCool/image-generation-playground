@@ -1,9 +1,11 @@
 # 账号数据库：本地开发与迁移
 
 数据库边界来自 `docs/implementation/spec-01-accounts.md` 和 `deploy/database-targets.json`。
-本阶段仅在隔离本地夹具验证，未迁移生产，也未修改其他应用数据库。`deploy/release-policy.json`
-当前仍为 `databaseMode: none`，表示发布工具尚未接线数据库准备、迁移和恢复流程，并不表示它会自动拦截包含数据库功能的制品。
-本阶段不可发布；账号功能上线前必须完成后续发布工作包和对应验收。
+当前实现仅在隔离本地夹具验证，未迁移生产，也未修改其他应用数据库。`deploy/release-policy.json`
+已采用 `databaseMode: postgresql`、`account-private-v1`、审核迁移 `0001–0005` 与 browser workspace schema 2；
+发布工具已接入受限迁移、只读核对和单项目备份恢复。实现和本地验证不代表生产已安装或已发布。
+当前分层验收见 [集成交接](../implementation/spec-06-integration-handoff.md)，生产安装、迁移、切换与恢复仍须遵守
+[发布和恢复手册](release-runbook.md) 的独立授权与门禁。
 
 ## 固定配置与权限
 
@@ -80,7 +82,8 @@ SQL 是受审阅的项目代码，审核清单是允许执行的精确字节集�
 身份校验通过后才获取本项目 advisory lock，并在一个事务中维护 `app.schema_migrations` 和执行未执行的迁移。
 账本保存版本、文件名、SHA-256 和执行时间；运行角色不能读取或改写账本。重复运行跳过相同版本，
 历史哈希/文件名变更或未知版本立即拒绝并回滚。数据库报错不输出原始 SQL/连接串；提交结果未知时先只读核对账本。
-追加迁移遵循先扩展后收缩，不通过修改已执行 SQL 或清空账本修复失败；数据库恢复与发布接线另行验收。
+追加迁移遵循先扩展后收缩，不通过修改已执行 SQL 或清空账本修复失败；数据库恢复与发布接线的本地证据见
+[阶段 4](../implementation/spec-04-account-release-recovery.md)，生产执行和阶段 5 的最新整体验收仍分别记录。
 
 ## 验证命令
 

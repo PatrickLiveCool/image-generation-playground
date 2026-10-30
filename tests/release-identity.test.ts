@@ -11,7 +11,7 @@ const identity = {
   platform: "linux/amd64", builtAt: "2026-10-26T00:00:00.000Z",
   browserWorkspaceSchema: 1, assetCapabilityVersion: 1,
 }
-const accountIdentity = { ...identity, schema: 2, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1",
+const accountIdentity = { ...identity, schema: 2, browserWorkspaceSchema: 2, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1",
   database: JSON.parse(readFileSync(new URL("../deploy/release-policy.json", import.meta.url), "utf8")).database }
 
 test("account identity includes the bounded project migration contract without publishing extra data", () => {
@@ -21,6 +21,8 @@ test("account identity includes the bounded project migration contract without p
   assert.throws(() => validateReleaseIdentity({ ...accountIdentity, schema: 1 }), /invalid/)
   assert.throws(() => validateReleaseIdentity({ ...accountIdentity, databaseMode: "none" }), /invalid/)
   assert.throws(() => validateReleaseIdentity({ ...accountIdentity, assetAccessProtocol: "public-bearer" }), /invalid/)
+  assert.equal(validateReleaseIdentity({ ...accountIdentity, browserWorkspaceSchema: 1 }).browserWorkspaceSchema, 1, "historical account artifacts remain inspectable")
+  assert.throws(() => validateReleaseIdentity({ ...accountIdentity, browserWorkspaceSchema: 3 }), /invalid/)
 })
 
 test("account identity rejects cross-project, incomplete or ambiguous migration contracts", () => {

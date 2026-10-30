@@ -10,7 +10,7 @@ import type { Generation } from "../components/image-combiner/types"
 import type { BuildCreationRequestInput } from "../lib/creation-request"
 
 const dir = mkdtempSync(path.join(tmpdir(), "creation-request-"))
-for (const name of ["api-provider-types", "model-mappings", "document-context", "creation-request"]) {
+for (const name of ["api-provider-types", "model-mappings", "document-context", "image-annotations", "creation-request"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8")
   writeFileSync(path.join(dir, `${name}.js`), ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)
 }
@@ -21,7 +21,8 @@ after(() => rmSync(dir, { recursive: true, force: true }))
 const creationId = "11111111-1111-4111-8111-111111111111"
 const generationId = "22222222-2222-4222-8222-222222222222"
 const originalImage = "/api/images/33333333-3333-4333-8333-333333333333"
-const mappings = [{ id: "quality", name: "极致", aspectRatios: ["square", "landscape"] }, { id: "balanced", name: "均衡", aspectRatios: ["square"] }]
+const annotation = { available: true, expression: "overlay-v1" as const, maxInputImages: 2 as const, reason: null }
+const mappings = [{ id: "quality", name: "极致", aspectRatios: ["square", "landscape"], annotation }, { id: "balanced", name: "均衡", aspectRatios: ["square"], annotation }]
 const catalog = { revision: 4, configured: true, apiMode: "images" as const, mappings }
 const reference = (name = "reference.png") => new File([new Uint8Array([137,80,78,71])], name, { type: "image/png" })
 function creation(draft: Partial<CreationDraft> = {}, versions: Generation[] = [], selectedVersionId: string | null = null): Creation {

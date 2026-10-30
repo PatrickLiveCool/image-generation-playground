@@ -5,6 +5,9 @@ import { decryptProviderSecret, providerConfigurationKey } from "./provider-secr
 import { validateProviderConfiguration } from "./provider-configuration-validation"
 import { approvedMigrations } from "../scripts/database/migration-catalog"
 import { verifyProjectPhysicalSchema } from "../scripts/database/schema-contract"
+import { serializeAnnotationSnapshot, validateAnnotationSnapshot } from "./image-annotations"
+import { validateAnnotationExecution } from "./annotation-execution"
+import { serializeAnnotationCapabilityBinding, serializeAnnotationCapabilityEvidence, serializeResolvedAnnotationCapabilityEvidence, validateAnnotationCapabilities, validateResolvedAnnotationCapability } from "./annotation-capability"
 
 export const MAX_PROJECT_BACKUP_BYTES = 64 * 1024 * 1024
 export const MAX_PROJECT_RECOVERY_SECRETS_BYTES = 64 * 1024
@@ -27,6 +30,10 @@ const date: Check = value => typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d
 const bigint: Check = value => typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= BigInt("9223372036854775807")
 const array = (maximum: number): Check => value => Array.isArray(value) && value.length <= maximum
 const timestamp = { createdAt: date, updatedAt: date }
+const validated = (validate: (value: unknown) => unknown): Check => value => {
+  try { return canonical(validate(value)) === canonical(value) } catch { return false }
+}
+const jsonColumns = new Set(["models", "mappings", "annotationCapabilities", "annotationSnapshot", "annotationExecution", "providerAnnotationCapability"])
 
 // 每个标识符都是审核过的常量；归档不提供表、列、SQL、角色或路径。
 const TABLES = {
@@ -37,14 +44,17 @@ const TABLES = {
   account: { id, accountId: id, providerId: oneOf("credential"), userId: id, accessToken: oneOf(null), refreshToken: oneOf(null), idToken: oneOf(null),
     accessTokenExpiresAt: oneOf(null), refreshTokenExpiresAt: oneOf(null), scope: oneOf(null), password: text(4096, 1), ...timestamp },
   account_audit: { id: bigint, actorId: id, subjectId: id, action: oneOf("bootstrap-admin", "create-user", "sign-in", "sign-out", "change-password", "disable", "restore", "reset-password"), createdAt: date },
-  provider_settings: { singleton: oneOf(1), baseUrl: text(2048, 1), tokenCiphertext: text(24000, 1), apiMode: oneOf("images", "chat"), models: array(5000), mappings: array(100), modelsSynced: bool, revision: integer(), updatedBy: id, updatedAt: date },
+  provider_settings: { singleton: oneOf(1), baseUrl: text(2048, 1), tokenCiphertext: text(24000, 1), apiMode: oneOf("images", "chat"), models: array(5000), mappings: array(100), modelsSynced: bool, revision: integer(), updatedBy: id, updatedAt: date,
+    annotationCapabilities: validated(validateAnnotationCapabilities) },
   provider_config_audit: { id: bigint, actorId: id, revision: integer(), action: oneOf("save"), createdAt: date },
   provider_request_slots: { userId: id, requestId: uuid, fingerprint: digest, status: oneOf("active", "finished", "unknown"), acceptedAt: date, deadlineAt: date },
   creations: { ownerId: id, id: uuid, title: text(60, 1), revision: integer(), nextVersion: integer(), ...timestamp },
   generation_runs: { ownerId: id, id: uuid, creationId: uuid, clientRequestId: uuid, fingerprint: digest, version: integer(), parentVersionId: optional(uuid),
     status: oneOf("preparing", "generating", "saving", "complete", "failed", "unknown", "save_pending"), prompt: text(5000), mappingId: text(128, 1), modelLabel: text(256, 1), aspectRatio: text(32, 1), quality: text(32, 1), mode: oneOf("text-to-image", "image-editing"),
     providerBaseUrl: text(2048, 1), providerApiMode: oneOf("images", "chat"), providerModelId: text(256, 1), providerRevision: integer(), manifestKey: text(1024, 1), outputKey: text(1024, 1), outputAssetId: uuid,
-    failureCode: optional(value => typeof value === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value)), ...timestamp, deadlineAt: date },
+    failureCode: optional(value => typeof value === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value)), ...timestamp, deadlineAt: date,
+    annotationSnapshot: optional(validated(validateAnnotationSnapshot)), annotationExecution: optional(validated(validateAnnotationExecution)),
+    providerAnnotationCapability: optional(validated(validateResolvedAnnotationCapability)) },
   private_assets: { ownerId: id, id: uuid, creationId: uuid, runId: uuid, key: text(1024, 1), kind: oneOf("image", "document"), mediaType: text(128, 1), byteLength: integer(1, 20 * 1024 * 1024), sha256: digest, name: optional(text(255, 1)), createdAt: date },
 } satisfies Record<string, Record<string, Check>>
 type Table = keyof typeof TABLES
@@ -72,6 +82,7 @@ function canonical(value: unknown, depth = 0): string {
   return JSON.stringify(value)
 }
 const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex")
+const bytesHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex")
 const migrationList = () => Object.entries(approvedMigrations).sort(([a], [b]) => a.localeCompare(b)).map(([name, sha256]) => ({ name, sha256 }))
 function validateSecrets(value: unknown): asserts value is ProjectRecoverySecrets {
   object(value, ["BETTER_AUTH_SECRET", "PROVIDER_CONFIG_KEY", "ASSET_ACCESS_SECRET"])
@@ -99,9 +110,9 @@ function validateRelease(value: unknown) {
   object(value, ["schema", "application", "version", "revision", "platform", "builtAt", "browserWorkspaceSchema", "assetCapabilityVersion", "databaseMode", "assetAccessProtocol", "database"])
   try { validateReleaseIdentity(value) } catch { throw new ProjectBackupError("BACKUP_RELEASE_INVALID") }
   const release = value as Row
-  requireSafe(release.schema === 2 && release.databaseMode === "postgresql" && release.assetAccessProtocol === "account-private-v1", "BACKUP_RELEASE_INVALID")
+  requireSafe(release.schema === 2 && release.browserWorkspaceSchema === 2 && release.databaseMode === "postgresql" && release.assetAccessProtocol === "account-private-v1", "BACKUP_RELEASE_INVALID")
   const database = release.database as Row
-  requireSafe(database?.name === "qintopia_image" && database.schema === "app" && canonical(database.migrations) === canonical(migrationList()), "BACKUP_RELEASE_INVALID")
+  requireSafe(database?.name === "qintopia_image" && database.schema === "app" && database.minVersion === "0005" && database.maxVersion === "0005" && canonical(database.migrations) === canonical(migrationList()), "BACKUP_RELEASE_INVALID")
 }
 function index(rows: Row[], key: (row: Row) => string) {
   const entries = rows.map(row => [key(row), row] as const)
@@ -130,7 +141,15 @@ function validateRecords(tables: Records, secrets: ProjectRecoverySecrets) {
     requireSafe(users.has(String(row.updatedBy)))
     try {
       const apiKey = decryptProviderSecret(row.tokenCiphertext, secrets)
-      validateProviderConfiguration({ revision: row.revision, settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey }, models: row.models, mappings: row.mappings, modelsSynced: row.modelsSynced })
+      const configuration = validateProviderConfiguration({ revision: row.revision, settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey }, models: row.models, mappings: row.mappings, modelsSynced: row.modelsSynced })
+      for (const capability of validateAnnotationCapabilities(row.annotationCapabilities)) {
+        const mapping = configuration.mappings.find(item => item.id === capability.mappingId)
+        // 后续禁用或降权不会抹去历史证据；保留记录者归属、原证据摘要与当前配置绑定校验。
+        requireSafe(mapping && users.has(capability.evidence.actorId) && capability.configurationRevision === row.revision &&
+          capability.evidenceSha256 === bytesHash(serializeAnnotationCapabilityEvidence(capability)) &&
+          capability.bindingSha256 === bytesHash(serializeAnnotationCapabilityBinding({ baseUrl: configuration.settings.baseUrl, apiMode: configuration.settings.apiMode,
+            modelId: mapping.modelId, tokenSha256: bytesHash(`qintopia-image:annotation-token:v1\0${apiKey}`) })), "BACKUP_ANNOTATION_CAPABILITY_INVALID")
+      }
     } catch { throw new ProjectBackupError("BACKUP_PROVIDER_INVALID") }
   }
   const slots = index(tables.provider_request_slots, row => compound(row.userId, row.requestId))
@@ -163,6 +182,41 @@ function validateRecords(tables: Records, secrets: ProjectRecoverySecrets) {
   for (const row of tables.generation_runs) if (row.status === "complete") {
     const output = assets.get(compound(row.ownerId, row.outputAssetId))
     requireSafe(output && output.runId === row.id && output.key === row.outputKey && output.kind === "image")
+  }
+  for (const row of tables.generation_runs) {
+    if (row.annotationSnapshot === null) {
+      requireSafe(row.annotationExecution === null && row.providerAnnotationCapability === null, "BACKUP_ANNOTATION_INVALID")
+      continue
+    }
+    requireSafe(row.providerAnnotationCapability !== null, "BACKUP_ANNOTATION_INVALID")
+    const snapshot = validateAnnotationSnapshot(row.annotationSnapshot)
+    const capability = validateResolvedAnnotationCapability(row.providerAnnotationCapability)
+    if (capability.sourceEvidence) {
+      const evidence = serializeResolvedAnnotationCapabilityEvidence(capability)
+      requireSafe(evidence && capability.sourceEvidence.mappingId === row.mappingId && users.has(capability.sourceEvidence.evidence.actorId) &&
+        bytesHash(evidence) === capability.evidenceSha256, "BACKUP_ANNOTATION_INVALID")
+    }
+    const parent = runs.get(compound(row.ownerId, row.parentVersionId))
+    const original = assets.get(compound(row.ownerId, snapshot.image.assetId))
+    requireSafe(parent && snapshot.baseVersionId === row.parentVersionId && snapshot.image.assetId === parent.outputAssetId &&
+      original && original.runId === parent.id && original.creationId === row.creationId && original.key === parent.outputKey && original.kind === "image" &&
+      capability.configurationRevision === row.providerRevision, "BACKUP_ANNOTATION_INVALID")
+    if (row.annotationExecution === null) {
+      requireSafe(["preparing", "failed", "unknown"].includes(String(row.status)), "BACKUP_ANNOTATION_INVALID")
+      continue
+    }
+    const execution = validateAnnotationExecution(row.annotationExecution)
+    requireSafe(execution.snapshotSha256 === bytesHash(serializeAnnotationSnapshot(snapshot)) && canonical(execution.capability) === canonical(capability) &&
+      execution.original.assetId === original.id && execution.original.sha256 === original.sha256 && execution.original.byteLength === original.byteLength &&
+      (["width", "height", "orientation", "pages"] as const).every(name => execution.original[name] === snapshot.image[name]) &&
+      execution.inputs.every((input, position) => input.key === `${prefix(row)}/inputs/reference-${position + 1}` && input.byteLength <= (position === 0 ? 20 : 10) * 1024 * 1024), "BACKUP_ANNOTATION_INVALID")
+    const inputAssets = tables.private_assets.filter(asset => asset.ownerId === row.ownerId && asset.runId === row.id && asset.kind === "image" && asset.key !== row.outputKey)
+    // 输入尚未作为完整版本发布时，只有冻结的COS引用；完成版本必须具备精确的两条私有素材记录。
+    if (row.status === "complete" || inputAssets.length) {
+      requireSafe(inputAssets.length === 2 && execution.inputs.every((input, position) => inputAssets.some(asset =>
+        asset.id === input.id && asset.key === input.key && asset.sha256 === input.sha256 && asset.byteLength === input.byteLength &&
+        (position === 0 ? asset.mediaType === original.mediaType : ["image/png", "image/jpeg"].includes(String(asset.mediaType))))), "BACKUP_ANNOTATION_INVALID")
+    }
   }
 }
 export function validateProjectBackupPayload(value: unknown): ProjectBackupPayload {
@@ -326,7 +380,7 @@ export async function restoreProjectBackup(client: DatabaseInspectionClient, con
       const names = columns(table), identity = table === "account_audit" || table === "provider_config_audit"
       for (let start = 0; start < tables[table].length; start += RESTORE_BATCH_ROWS) {
         const batch = tables[table].slice(start, start + RESTORE_BATCH_ROWS)
-        const values = batch.flatMap(row => names.map(name => name === "models" || name === "mappings" ? JSON.stringify(row[name]) : row[name]))
+        const values = batch.flatMap(row => names.map(name => jsonColumns.has(name) && row[name] !== null ? JSON.stringify(row[name]) : row[name]))
         const placeholders = batch.map((_, rowIndex) => `(${names.map((_, columnIndex) => `$${rowIndex * names.length + columnIndex + 1}`).join(",")})`).join(",")
         await client.query(`INSERT INTO app.${quoted(table)} (${names.map(quoted).join(",")})${identity ? " OVERRIDING SYSTEM VALUE" : ""} VALUES ${placeholders}`, values)
       }

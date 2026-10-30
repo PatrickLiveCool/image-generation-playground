@@ -206,7 +206,7 @@ test("workspace snapshots exclude API credentials, controllers, and accidental t
 })
 
 test("unsupported or corrupt stored workspaces are rejected instead of silently replaced", () => {
-  assert.throws(() => restoreWorkspace({ ...withVersion(), schema: 2 }), /版本不兼容|损坏/)
+  assert.throws(() => restoreWorkspace({ ...withVersion(), schema: 3 }), /版本不兼容|损坏/)
   assert.throws(() => restoreWorkspace({ ...withVersion(), revision: -1 }))
   const duplicate = withVersion()
   duplicate.creations.push(duplicate.creations[0])

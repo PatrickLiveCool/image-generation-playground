@@ -5,6 +5,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test } from "node:test"
+import sharp from "sharp"
 import { bootstrapAdministrator, changePassword, createAccount, manageAccount } from "../lib/auth/accounts"
 import { handleAuthRequest } from "../lib/auth/http"
 import { accountIdentity } from "../lib/auth/guards"
@@ -14,7 +15,8 @@ import { readDatabaseConfiguration } from "../lib/database-target"
 import { executePrivateGeneration, readVerifiedPrivateAsset } from "../lib/private-generation"
 import { bytesHash, parsePrivateGenerationForm } from "../lib/private-generation-input"
 import { acceptPrivateRun, createPrivateCreation, listPrivateCreations, readPrivateAsset, readPrivateRun } from "../lib/private-workspace-service"
-import { readAdminProvider, saveAdminProvider } from "../lib/provider-configuration"
+import { readAdminProvider, recordAdminAnnotationCapability, saveAdminProvider } from "../lib/provider-configuration"
+import { validateAnnotationSnapshot, type AnnotationSnapshot } from "../lib/image-annotations"
 import { decryptProviderSecret } from "../lib/provider-secret"
 import { PROJECT_BACKUP_TABLES, ProjectBackupError, decodeProjectBackup, exportProjectBackup, preflightProjectRestore, projectBackupStorage, projectRecoverySecrets, restoreProjectBackup, verifyRestoredProjectBackup, type ProjectBackupPayload } from "../lib/project-backup"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
@@ -62,7 +64,7 @@ function executeBundle(command: string, input?: Buffer) {
       secrets: prepared?.length ? JSON.parse(prepared.toString("utf8")) : undefined }
   } finally { for (const fd of descriptors) closeSync(fd); rmSync(directory, { recursive: true, force: true }) }
 }
-const release = { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "b".repeat(40), platform: "linux/amd64", builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 1, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: policy.database }
+const release = { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "b".repeat(40), platform: "linux/amd64", builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 2, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: policy.database }
 async function login(username: string, value = password): Promise<Headers> {
   const response = await handleAuthRequest(new Request("http://localhost:3000/api/auth/sign-in/username", { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify({ username, password: value }) }))
   assert.equal(response.status, 200, await response.clone().text())
@@ -71,7 +73,7 @@ async function login(username: string, value = password): Promise<Headers> {
 const code = (expected: string) => (error: unknown) => (error instanceof ProjectBackupError || error instanceof AccountError) && error.code === expected
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
-  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([name, item]) => `${JSON.stringify(name)}:${canonical(item)}`).join(",")}}`
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map(name => `${JSON.stringify(name)}:${canonical((value as Record<string, unknown>)[name])}`).join(",")}}`
   return JSON.stringify(value)
 }
 function authenticatedInvalidArchive(payload: ProjectBackupPayload, change: (value: ProjectBackupPayload) => void): Buffer {
@@ -114,6 +116,8 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     userHeaders.push(await login(username))
   }
   await saveAdminProvider(adminHeaders, { revision: 0, settings: { baseUrl: "https://synthetic-backup.example/v1", apiKey: "synthetic-backup-provider-token", apiMode: "images" }, models: [], mappings: [{ id: "mapping-backup", name: "合成恢复模型", modelId: "synthetic-model" }], modelsSynced: false })
+  const configurationRevision = (await recordAdminAnnotationCapability(adminHeaders, { revision: 1, mappingId: "mapping-backup",
+    evidenceReference: "https://synthetic-backup.example/input-contract", evidenceNote: "合成恢复夹具确认两张输入，不代表真实模型效果。", confirmed: true })).revision
   const identities = await Promise.all(userHeaders.map(headers => accountIdentity(headers)))
   const objects = new Map<string, { bytes: Uint8Array; mediaType: string }>()
   const store: PrivateCosStore = {
@@ -124,24 +128,30 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
   const inputHashes: string[][] = []
   const generate = async (_settings: unknown, input: { images: { bytes: Uint8Array }[] }) => {
     inputHashes.push(input.images.map(image => bytesHash(image.bytes))); modelCalls++
-    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=", "base64")
-    return { bytes: Buffer.concat([png, Buffer.from(`synthetic-version-${modelCalls}`)]), mediaType: "image/png" }
+    const png = await sharp({ create: { width: 96, height: 64, channels: 3, background: { r: 20 * modelCalls, g: 100, b: 180 } } }).png().toBuffer()
+    return { bytes: png, mediaType: "image/png" }
   }
   const creationIds = [randomUUID(), randomUUID()]
-  async function input(owner: number, parent?: string, document = false) {
+  async function input(owner: number, parent?: string, document = false, annotationSnapshot?: AnnotationSnapshot) {
     const form = new FormData()
-    for (const [name, value] of Object.entries({ creationId: creationIds[owner], clientRequestId: randomUUID(), mappingId: "mapping-backup", configRevision: "1", prompt: "合成恢复演练：保留主体", aspectRatio: "square", quality: "auto", mode: parent ? "image-editing" : "text-to-image" })) form.set(name, value)
+    for (const [name, value] of Object.entries({ creationId: creationIds[owner], clientRequestId: randomUUID(), mappingId: "mapping-backup", configRevision: String(configurationRevision), prompt: "合成恢复演练：保留主体", aspectRatio: "square", quality: "auto", mode: parent ? "image-editing" : "text-to-image" })) form.set(name, value)
     if (parent) form.set("parentVersionId", parent)
     if (document) form.set("document", new File(["需要恢复的合成文档"], "合成恢复.txt", { type: "text/plain" }))
+    if (annotationSnapshot) form.set("annotationSnapshot", JSON.stringify(annotationSnapshot))
     return parsePrivateGenerationForm(form)
   }
   const first = await executePrivateGeneration(identities[0], await input(0), undefined, { store, generate })
-  const second = await executePrivateGeneration(identities[0], await input(0, first.id, true), undefined, { store, generate })
+  const annotationSnapshot = validateAnnotationSnapshot({ schema: 1, coordinateSpace: "encoded-pixels-v1", baseVersionId: first.id,
+    image: { assetId: first.imageUrl!.split("/").at(-1)!, width: 96, height: 64, orientation: 1, pages: 1 },
+    marks: [{ id: randomUUID(), number: 3, instruction: "将选区改成暖色，保留主体", geometry: { type: "rectangle", x: 10, y: 8, width: 30, height: 24 } }] })
+  const second = await executePrivateGeneration(identities[0], await input(0, first.id, true, annotationSnapshot), undefined, { store, generate })
   const other = await executePrivateGeneration(identities[1], await input(1), undefined, { store, generate })
   assert.equal(first.status, "complete"); assert.equal(second.status, "complete"); assert.equal(other.status, "complete")
   const assetId = first.imageUrl!.split("/").at(-1)!
   const firstAsset = await readPrivateAsset(identities[0], assetId, "image")
   assert.equal(inputHashes[1][0], bytesHash((await readVerifiedPrivateAsset(firstAsset, store)).bytes))
+  assert.equal(inputHashes[1].length, 2)
+  assert.deepEqual(second.annotationSnapshot, annotationSnapshot)
   await assert.rejects(readPrivateAsset(identities[1], assetId, "image"), code("NOT_FOUND"))
   await assert.rejects(readPrivateAsset(await accountIdentity(adminHeaders), assetId, "image"), code("NOT_FOUND"))
   const pendingInput = await input(0, first.id)
@@ -161,6 +171,9 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     const archive = bundledCli ? executeBundle("backup").archive! : await exportProjectBackup(client, configuration, release, secrets, key, storage)
     const payload = decodeProjectBackup(archive, key)
     assert.equal(payload.tables.user.length, 3); assert.equal(payload.tables.generation_runs.length, 4)
+    const annotatedVersion = payload.tables.generation_runs.find(row => row.id === second.id)!
+    assert.deepEqual(annotatedVersion.annotationSnapshot, annotationSnapshot)
+    assert.ok(annotatedVersion.annotationExecution)
     const temporaryAccount = payload.tables.user.find(row => row.id === identities[1].user.id)!
     assert.equal(temporaryAccount.mustChangePassword, true)
     assert.equal(temporaryAccount.temporaryPasswordUsedAt, null)
@@ -175,6 +188,10 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
       value => { const row = value.tables.private_assets[0]; row.key = String(row.key).replace(/private\/v1\/[0-9a-f]{64}/, `private/v1/${"0".repeat(64)}`) },
       value => { value.tables.private_assets.find(row => row.runId === first.id)!.runId = other.id },
       value => { value.secrets.PROVIDER_CONFIG_KEY = Buffer.alloc(32, 63).toString("base64") },
+      value => { (value.tables.generation_runs.find(row => row.id === second.id)!.annotationSnapshot as AnnotationSnapshot).marks[0].instruction = "篡改快照" },
+      value => { (value.tables.generation_runs.find(row => row.id === second.id)!.annotationExecution as any).inputs[1].sha256 = "0".repeat(64) },
+      value => { (value.tables.provider_settings[0].annotationCapabilities as any[])[0].evidence.note = "篡改能力证据" },
+      value => { (value.tables.provider_settings[0].annotationCapabilities as any[])[0].evidence.actorId = identities[0].user.id },
     ]
     for (const change of corruptions) {
       let queries = 0
@@ -252,6 +269,9 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     const restoredOther = await login(names[2])
     assert.equal((await listPrivateCreations(restoredAdmin))[0].id, "00000000-0000-0000-0000-000000000000")
     const recovered = await accountIdentity(restoredUser)
+    const recoveredAnnotation = await readPrivateRun(recovered, second.id)
+    assert.deepEqual(recoveredAnnotation.public.annotationSnapshot, annotationSnapshot)
+    assert.deepEqual(recoveredAnnotation.annotationExecution, annotatedVersion.annotationExecution)
     assert.equal((await listPrivateCreations(restoredUser)).find(creation => creation.id === creationIds[0])!.versions.length, 3)
     assert.equal((await runtime.query('SELECT count(*)::integer AS count FROM app.creations WHERE id=ANY($1::uuid[])', [bulkCreationIds])).rows[0].count, bulkCreationIds.length)
     assert.equal((await listPrivateCreations(restoredOther))[0].versions.length, 1)
@@ -264,6 +284,6 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     await manageAccount(restoredAdmin, recovered.user.id, { action: "disable" })
     await assert.rejects(accountIdentity(restoredUser), code("UNAUTHENTICATED"))
     assert.equal(modelCalls, 3)
-    console.log(JSON.stringify({ projectRecovery: "passed", accounts: 3, simulatedModelCalls: modelCalls, realModelCalls: 0, cloudWrites: 0, oldSessionsRestored: 0, temporaryPasswordRevoked: true, bulkCreationsRestored: bulkCreationIds.length, commitReceiptLoss: "verified-read-only", packagedCli: Boolean(bundledCli) }))
+    console.log(JSON.stringify({ projectRecovery: "passed", accounts: 3, annotationSnapshotRestored: true, simulatedModelCalls: modelCalls, realModelCalls: 0, cloudWrites: 0, oldSessionsRestored: 0, temporaryPasswordRevoked: true, bulkCreationsRestored: bulkCreationIds.length, commitReceiptLoss: "verified-read-only", packagedCli: Boolean(bundledCli) }))
   } finally { client.release() }
 })
