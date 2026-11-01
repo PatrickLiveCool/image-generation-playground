@@ -547,6 +547,44 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.system.database_calls, [])
         self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
 
+    def test_rejected_annotation_transition_recovers_before_floor_then_accepts_account_bridge(self):
+        self.runtime.deploy(*self.bundle('v0.2.6', 'c' * 40))
+        self.runtime.acknowledge('complete')
+        source = dict(self.runtime.state['current'])
+        source_process = dict(self.system.unit_process(source))
+        site = pathlib.Path(self.config['nginxSite']).read_bytes()
+        stops, reloads = list(self.system.stops), self.system.reloads
+
+        with self.assertRaisesRegex(ReleaseError, 'formats are not rollback compatible'):
+            self.runtime.deploy(*self.bundle('v0.4.0', 'b' * 40, account=True, workspace=2))
+        candidate = self.runtime.journal['target']
+        self.assertEqual(self.runtime.journal['phase'], 'preparing')
+        self.assertFalse(self.runtime.access_floor_path.exists())
+        self.assertFalse(self.system.process_matches(candidate))
+        self.assertEqual(self.system.database_calls, [])
+
+        restarted = Runtime(self.config, self.system, self.fetch)
+        recovered = restarted.recover()
+        self.assertEqual(recovered['status'], 'healthy')
+        self.assertEqual(recovered['transaction']['phase'], 'aborted')
+        self.assertEqual(recovered['current'], source)
+        self.assertEqual(self.system.unit_process(source), source_process)
+        self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
+        self.assertEqual(self.system.stops, stops)
+        self.assertEqual(self.system.reloads, reloads)
+        self.assertEqual(self.system.database_calls, [])
+        self.assertFalse(restarted.access_floor_path.exists())
+        self.assertNotIn('serviceMaintenance', restarted.state)
+        self.assertTrue((pathlib.Path(candidate['path']) / '.release-receipt.json').is_file())
+
+        bridge = restarted.deploy(*self.bundle('v0.3.0', 'a' * 40, account=True, workspace=1, database_version='0004'))
+        self.assertEqual(bridge['status'], 'healthy')
+        self.assertEqual(bridge['assetAccessProtocol'], 'account-private-v1')
+        self.assertEqual(bridge['current']['manifest']['browserWorkspaceSchema'], 1)
+        self.assertEqual(bridge['database']['after']['version'], '0004')
+        self.assertTrue(restarted.access_floor_path.exists())
+        self.assertEqual([command for command, _ in self.system.database_calls], ['preflight', 'migrate', 'verify'])
+
     def test_migration_lost_ack_uses_read_only_verify_without_repeating_ddl(self):
         self.system.migration_lost_receipt = True
         self.runtime.deploy(*self.bundle(account=True))
