@@ -709,13 +709,16 @@ class Runtime:
         source = self.journal.get('source') if self.journal else self.state.get('current')
         if not source:
             return False
+        # The floor is written before any account preflight or activation. A
+        # candidate rejected before that boundary has not exposed its workspace
+        # format, so the unchanged healthy anonymous source remains recoverable.
+        if not self.access_floor:
+            return not is_account_release(source.get('manifest', {})) and self.healthy(source)
         target = (self.journal or {}).get('target')
         if target:
             source_format, target_format = source.get('manifest', source), target['manifest']
             if source_format.get('browserWorkspaceSchema', 0) < target_format['browserWorkspaceSchema'] or source_format.get('assetCapabilityVersion') != target_format['assetCapabilityVersion']:
                 return False
-        if not self.access_floor:
-            return self.healthy(source)
         if not is_account_release(source.get('manifest', {})):
             return False
         try:
