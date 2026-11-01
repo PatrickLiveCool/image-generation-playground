@@ -670,7 +670,7 @@ class Runtime:
                 require(metadata.get(key) == manifest.get(key), 'runtime metadata differs from manifest')
             policy = read_json(target / 'release-policy.json')
             require(policy.get('databaseMode') == manifest['databaseMode'] and policy.get('rollbackCompatibility', {}).get('mode') in ['compatible', 'forward-only'], 'unsupported release compatibility policy')
-            require(policy.get('browserWorkspaceSchema') == 1 and policy.get('assetCapabilityVersion') == 1, 'unsupported browser or asset schema')
+            require(policy.get('browserWorkspaceSchema') in ({1, 2} if is_account_release(manifest) else {1}) and policy.get('assetCapabilityVersion') == 1, 'unsupported browser or asset schema')
             require(not self.access_floor or is_account_release(manifest), 'account access floor forbids legacy activation or rollback')
             self.share_static(target / '.next/static')
             return reference
@@ -709,6 +709,11 @@ class Runtime:
         source = self.journal.get('source') if self.journal else self.state.get('current')
         if not source:
             return False
+        target = (self.journal or {}).get('target')
+        if target:
+            source_format, target_format = source.get('manifest', source), target['manifest']
+            if source_format.get('browserWorkspaceSchema', 0) < target_format['browserWorkspaceSchema'] or source_format.get('assetCapabilityVersion') != target_format['assetCapabilityVersion']:
+                return False
         if not self.access_floor:
             return self.healthy(source)
         if not is_account_release(source.get('manifest', {})):
@@ -802,7 +807,7 @@ class Runtime:
         self.phase('database_preflight')
         source = self.journal['source'].get('manifest', {})
         target_database = target['manifest']['database']
-        if not is_account_release(source) or source['database']['maxVersion'] < target_database['maxVersion'] or self.state.get('serviceMaintenance'):
+        if not is_account_release(source) or source['database']['maxVersion'] < target_database['maxVersion'] or source.get('browserWorkspaceSchema') != target['manifest']['browserWorkspaceSchema'] or self.state.get('serviceMaintenance'):
             self.enter_service_maintenance()
         self.phase('migrating')
         try:
@@ -1254,8 +1259,12 @@ class Runtime:
             require(current.get('manifest', {}).get('rollbackCompatibility', {}).get('mode', 'compatible') == 'compatible'
                     and target['manifest']['rollbackCompatibility']['mode'] == 'compatible', 'release policy forbids rollback')
         source_schema = current.get('manifest', current)
-        for field in ['browserWorkspaceSchema', 'assetCapabilityVersion']:
-            require(source_schema.get(field) == target['manifest'].get(field), 'browser or asset formats are not rollback compatible')
+        target_schema = target['manifest']
+        annotation_upgrade = operation == 'deploy' and is_account_release(source_schema) and is_account_release(target_schema) \
+            and source_schema.get('browserWorkspaceSchema') == 1 and target_schema['browserWorkspaceSchema'] == 2
+        require(source_schema.get('assetCapabilityVersion') == target_schema.get('assetCapabilityVersion')
+                and (source_schema.get('browserWorkspaceSchema') == target_schema.get('browserWorkspaceSchema') or annotation_upgrade),
+                'browser or asset formats are not rollback compatible')
         try:
             self.prepare_database(target)
             if not self.system.process_matches(target):

@@ -65,9 +65,9 @@ class OrchestrateTests(unittest.TestCase):
             prefix = value['current']['prefix']
             with self.assertRaisesRegex(ReleaseError, 'access floor and database ledger'):
                 validate_receipt(value, prefix, anchor, manifest)
-            value.update(assetAccessProtocol='account-private-v1', database={'after': {'compatible': True, 'version': '0004', 'pending': [], 'connectionBudget': 9, 'ledgerSha256': 'f' * 64}})
+            value.update(assetAccessProtocol='account-private-v1', database={'after': {'compatible': True, 'version': '0005', 'pending': [], 'connectionBudget': 9, 'ledgerSha256': 'f' * 64}})
             self.assertIn(prefix, validate_receipt(value, prefix, anchor, manifest))
-            value['database']['after']['pending'] = ['0004-private-workspace.sql']
+            value['database']['after']['pending'] = ['0005-image-annotations.sql']
             with self.assertRaises(ReleaseError):
                 validate_receipt(value, prefix, anchor, manifest)
 

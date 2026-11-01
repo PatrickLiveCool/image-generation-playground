@@ -1,6 +1,7 @@
 import type { Generation } from "@/components/image-combiner/types"
 import type { PrivateCreation, PrivateRun } from "./private-workspace-types"
 import type { Creation, CreationDraft, CreativeWorkspace } from "./creation-types"
+import { validateAnnotationSnapshot, type AnnotationDraft } from "./image-annotations"
 
 export const DEFAULT_CREATION_TITLE = "未命名创作"
 export const UNKNOWN_REQUEST_MESSAGE = "页面刷新后请求状态未知，请查看状态，勿重复提交"
@@ -8,15 +9,43 @@ export const EMERGENCY_DRAFT_KEY = "image-playground-emergency-drafts-v1"
 const DATABASE = "image-playground-creations"
 const STORE = "workspace"
 const KEY = "current"
-const DRAFT_KEYS = ["prompt", "documentName", "documentText", "documentFile", "selectedMappingId", "aspectRatio", "quality", "useUrls", "image1", "image2", "image1Url", "image2Url"] as const
+const DRAFT_KEYS = ["prompt", "documentName", "documentText", "documentFile", "documentImageInspection", "annotationDrafts", "selectedMappingId", "aspectRatio", "quality", "useUrls", "image1", "image2", "image1Url", "image2Url"] as const
 const QUALITIES = new Set(["auto", "low", "medium", "high"])
 
+function restoreImageInspection(value: unknown): CreationDraft["documentImageInspection"] {
+  if (value === undefined) return "unknown"
+  if (!["none", "present", "unknown"].includes(String(value))) throw new Error("文档图片检查记录无效，已停止覆盖原记录。")
+  return value as CreationDraft["documentImageInspection"]
+}
+
+/** Invalid annotation buckets must stop recovery, never disappear on the next save. */
+export function restoreAnnotationDrafts(value: unknown): Record<string, AnnotationDraft> {
+  if (value === undefined) return {}
+  if (!object(value)) throw new Error("批注草稿已损坏，已停止覆盖原记录。")
+  const result: Record<string, AnnotationDraft> = {}
+  for (const [baseVersionId, raw] of Object.entries(value)) {
+    if (!object(raw) || !Number.isSafeInteger(raw.revision) || Number(raw.revision) < 0 || !Number.isSafeInteger(raw.nextNumber) || Number(raw.nextNumber) < 1) throw new Error("批注草稿编号无效，已停止覆盖原记录。")
+    const snapshot = validateAnnotationSnapshot(raw.snapshot, { allowIncomplete: true })
+    if (snapshot.baseVersionId !== baseVersionId || snapshot.marks.some(mark => mark.number >= Number(raw.nextNumber))) throw new Error("批注草稿基准或编号不匹配，已停止覆盖原记录。")
+    Object.defineProperty(result, baseVersionId, { enumerable: true, configurable: true, writable: true, value: { snapshot, revision: Number(raw.revision), nextNumber: Number(raw.nextNumber) } })
+  }
+  return result
+}
+
+function clearSubmittedAnnotations(draft: CreationDraft, submitted?: Generation): CreationDraft {
+  const baseId = submitted?.annotationSnapshot?.baseVersionId
+  if (!baseId || submitted?.submittedAnnotationRevision === undefined || draft.annotationDrafts?.[baseId]?.revision !== submitted.submittedAnnotationRevision) return draft
+  const annotationDrafts = { ...draft.annotationDrafts }
+  delete annotationDrafts[baseId]
+  return { ...draft, annotationDrafts }
+}
+
 export function emptyDraft(initial: Partial<CreationDraft> = {}): CreationDraft {
-  return { prompt: "", documentName: "", documentText: "", documentFile: null, selectedMappingId: "", aspectRatio: "square", quality: "auto", useUrls: false, image1: null, image2: null, image1Url: "", image2Url: "", ...initial }
+  return { prompt: "", documentName: "", documentText: "", documentFile: null, documentImageInspection: "unknown", annotationDrafts: {}, selectedMappingId: "", aspectRatio: "square", quality: "auto", useUrls: false, image1: null, image2: null, image1Url: "", image2Url: "", ...initial }
 }
 
 export function emptyWorkspace(): CreativeWorkspace {
-  return { schema: 1, revision: 0, activeCreationId: null, creations: [] }
+  return { schema: 2, revision: 0, activeCreationId: null, creations: [] }
 }
 
 export function newCreation(initial: Partial<CreationDraft> = {}, id: string = crypto.randomUUID(), now = Date.now()): Creation {
@@ -79,11 +108,12 @@ export function selectCreationVersion(workspace: CreativeWorkspace, creationId: 
 export function startCreationGeneration(workspace: CreativeWorkspace, creationId: string, generation: Generation): CreativeWorkspace {
   return changeCreation(workspace, creationId, creation => {
     if (creation.versions.some(version => version.status === "loading" || version.id === generation.id)) return creation
+    if (generation.parentVersionId !== undefined && generation.parentVersionId !== creation.selectedVersionId) return creation
     const parent = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
     const version = Math.max(0, ...creation.versions.filter(item => item.status === "complete").map(item => item.version ?? 0)) + 1
     const next: Generation = { ...generation, creationId, version, parentVersionId: parent?.id ?? null, status: "loading", progress: 0, imageUrl: null, error: undefined, abortController: undefined }
     const title = creation.remoteRevision === undefined && creation.title === DEFAULT_CREATION_TITLE ? generation.prompt.replace(/\s+/g, " ").trim().slice(0, 24) || DEFAULT_CREATION_TITLE : creation.title
-    return { ...creation, title, updatedAt: generation.timestamp, versions: [next, ...creation.versions], pendingDraftRevision: creation.draftRevision }
+    return { ...creation, title, updatedAt: generation.timestamp, versions: [next, ...creation.versions], pendingDraftRevision: generation.submittedDraftRevision ?? creation.draftRevision }
   })
 }
 
@@ -103,11 +133,12 @@ export function completeCreationGeneration(workspace: CreativeWorkspace, creatio
   return changeCreation(workspace, creationId, creation => {
     if (!creation.versions.some(version => version.id === id && version.status === "loading")) return creation
     const sameDraft = creation.pendingDraftRevision === creation.draftRevision
+    const preservedDraft = clearSubmittedAnnotations(creation.draft, creation.versions.find(version => version.id === id))
     return {
       ...creation, updatedAt: now, selectedVersionId: id, unread: workspace.activeCreationId !== creationId, pendingDraftRevision: null,
       versions: creation.versions.map(version => version.id === id ? { ...version, status: "complete" as const, progress: 100, phase: undefined, imageUrl: result.imageUrl, error: undefined, abortController: undefined } : version),
-      draft: sameDraft ? { ...creation.draft, prompt: "", documentName: "", documentText: "", documentFile: null, image1: null, image2: null, image1Url: "", image2Url: "" } : creation.draft,
-      draftRevision: sameDraft ? creation.draftRevision + 1 : creation.draftRevision,
+      draft: sameDraft ? { ...preservedDraft, prompt: "", documentName: "", documentText: "", documentFile: null, documentImageInspection: "unknown", image1: null, image2: null, image1Url: "", image2Url: "" } : preservedDraft,
+      draftRevision: sameDraft || preservedDraft !== creation.draft ? creation.draftRevision + 1 : creation.draftRevision,
     }
   })
 }
@@ -140,7 +171,7 @@ export function privateRunGeneration(run: PrivateRun): Generation {
     progress: run.status === "complete" ? 100 : 0, imageUrl: run.imageUrl, prompt: run.prompt,
     model: run.mappingId, modelLabel: run.modelLabel, aspectRatio: run.aspectRatio,
     quality: ["auto", "low", "medium", "high"].includes(run.quality) ? run.quality as CreationDraft["quality"] : "auto",
-    mode: run.mode, timestamp: run.createdAt, document: run.document,
+    mode: run.mode, timestamp: run.createdAt, document: run.document, annotationSnapshot: run.annotationSnapshot ?? null,
     error: run.status === "save_pending" ? "图片保存尚未确认，可仅补记保存；不会再次调用模型。"
       : run.status === "unknown" ? "任务结果未知，请查看状态；不要重复提交。"
       : run.status === "failed" ? PRIVATE_FAILURE_MESSAGES[run.failureCode ?? ""] ?? "本次任务未完成，输入已保留。" : undefined,
@@ -153,19 +184,20 @@ export function applyPrivateRun(workspace: CreativeWorkspace, run: PrivateRun): 
     const previous = creation.versions.find(version => version.id === run.id)
     const remoteRevision = Math.max(creation.remoteRevision ?? 0, run.creationRevision)
     if (previous?.runStatus === "complete" && run.status !== "complete") return remoteRevision === creation.remoteRevision ? creation : { ...creation, remoteRevision }
-    const generation = { ...privateRunGeneration(run), submittedDraftRevision: previous?.submittedDraftRevision }
+    const generation = { ...privateRunGeneration(run), submittedDraftRevision: previous?.submittedDraftRevision, submittedAnnotationRevision: previous?.submittedAnnotationRevision }
     const completedNow = run.status === "complete" && previous?.status !== "complete"
     const submittedHere = previous?.submittedDraftRevision !== undefined
     const sameBase = submittedHere && (previous.parentVersionId ?? null) === creation.selectedVersionId
     const clear = completedNow && sameBase && previous.submittedDraftRevision === creation.draftRevision
+    const preservedDraft = completedNow ? clearSubmittedAnnotations(creation.draft, previous) : creation.draft
     return {
       ...creation, remoteRevision, updatedAt: Math.max(creation.updatedAt, run.updatedAt),
       versions: [generation, ...creation.versions.filter(version => version.id !== run.id)].sort((a, b) => b.timestamp - a.timestamp),
       selectedVersionId: completedNow && sameBase ? run.id : creation.selectedVersionId,
       unread: completedNow && submittedHere && workspace.activeCreationId !== creation.id ? true : creation.unread,
       pendingDraftRevision: ["complete", "failed"].includes(run.status) ? null : creation.pendingDraftRevision,
-      draft: clear ? { ...creation.draft, prompt: "", documentName: "", documentText: "", documentFile: null, image1: null, image2: null, image1Url: "", image2Url: "" } : creation.draft,
-      draftRevision: creation.draftRevision + (clear ? 1 : 0),
+      draft: clear ? { ...preservedDraft, prompt: "", documentName: "", documentText: "", documentFile: null, documentImageInspection: "unknown", image1: null, image2: null, image1Url: "", image2Url: "" } : preservedDraft,
+      draftRevision: creation.draftRevision + (clear || preservedDraft !== creation.draft ? 1 : 0),
     }
   })
 }
@@ -202,7 +234,7 @@ export function mergePrivateWorkspace(local: CreativeWorkspace, remote: PrivateC
     creation.versions.push(...versions.map(run => {
       const before = existing?.versions.find(item => item.id === run.id)
       return before && before.status !== "complete" && run.status === "complete"
-        ? before : { ...run, submittedDraftRevision: before?.submittedDraftRevision }
+        ? before : { ...run, submittedDraftRevision: before?.submittedDraftRevision, submittedAnnotationRevision: before?.submittedAnnotationRevision }
     }))
     let merged = { ...local, creations: [creation] }
     for (const run of server.versions) {
@@ -219,16 +251,16 @@ export function mergePrivateWorkspace(local: CreativeWorkspace, remote: PrivateC
 
 /** Explicit whitelist: controllers, credentials and unrelated transient values never enter IndexedDB. */
 function storedGeneration(generation: Generation): Generation {
-  const { id, status, progress, imageUrl, prompt, timestamp, error, creationId, version, parentVersionId, model, modelLabel, thinkingLevel, resolution, useGrounding, aspectRatio, mode, runStatus, submittedDraftRevision, quality, document } = generation
-  return { id, status, progress, imageUrl, prompt, timestamp, error, creationId, version, parentVersionId, model, modelLabel, thinkingLevel, resolution, useGrounding, aspectRatio, mode, runStatus, submittedDraftRevision, quality, document }
+  const { id, status, progress, imageUrl, prompt, timestamp, error, creationId, version, parentVersionId, model, modelLabel, thinkingLevel, resolution, useGrounding, aspectRatio, mode, runStatus, submittedDraftRevision, submittedAnnotationRevision, annotationSnapshot, quality, document } = generation
+  return { id, status, progress, imageUrl, prompt, timestamp, error, creationId, version, parentVersionId, model, modelLabel, thinkingLevel, resolution, useGrounding, aspectRatio, mode, runStatus, submittedDraftRevision, submittedAnnotationRevision, annotationSnapshot: annotationSnapshot ? validateAnnotationSnapshot(annotationSnapshot) : annotationSnapshot, quality, document }
 }
 
 export function workspaceSnapshot(workspace: CreativeWorkspace): CreativeWorkspace {
-  return { schema: 1, revision: workspace.revision, lastWriteId: workspace.lastWriteId, activeCreationId: workspace.activeCreationId, creations: workspace.creations.map(creation => ({
+  return { schema: 2, revision: workspace.revision, lastWriteId: workspace.lastWriteId, activeCreationId: workspace.activeCreationId, creations: workspace.creations.map(creation => ({
     id: creation.id, title: creation.title, remoteRevision: creation.remoteRevision, localOnly: creation.localOnly, creationUnknown: creation.creationUnknown, createdAt: creation.createdAt, updatedAt: creation.updatedAt,
     selectedVersionId: creation.selectedVersionId, unread: creation.unread,
     draftRevision: creation.draftRevision, pendingDraftRevision: creation.pendingDraftRevision,
-    draft: { prompt: creation.draft.prompt, documentName: creation.draft.documentName, documentText: creation.draft.documentText, documentFile: creation.draft.documentFile, selectedMappingId: creation.draft.selectedMappingId, aspectRatio: creation.draft.aspectRatio, quality: creation.draft.quality, useUrls: creation.draft.useUrls, image1: creation.draft.image1, image2: creation.draft.image2, image1Url: creation.draft.image1Url, image2Url: creation.draft.image2Url },
+    draft: { prompt: creation.draft.prompt, documentName: creation.draft.documentName, documentText: creation.draft.documentText, documentFile: creation.draft.documentFile, documentImageInspection: creation.draft.documentImageInspection, annotationDrafts: restoreAnnotationDrafts(creation.draft.annotationDrafts), selectedMappingId: creation.draft.selectedMappingId, aspectRatio: creation.draft.aspectRatio, quality: creation.draft.quality, useUrls: creation.draft.useUrls, image1: creation.draft.image1, image2: creation.draft.image2, image1Url: creation.draft.image1Url, image2Url: creation.draft.image2Url },
     versions: creation.versions.map(storedGeneration),
   })) }
 }
@@ -245,7 +277,7 @@ function restoreFile(value: unknown, name: string): File | null {
 }
 
 export function restoreWorkspace(value: unknown): CreativeWorkspace {
-  if (!object(value) || value.schema !== 1 || !Array.isArray(value.creations) || !Number.isInteger(value.revision) || (value.revision as number) < 0) throw new Error("创作记录版本不兼容或已损坏，已停止覆盖原记录。")
+  if (!object(value) || (value.schema !== 1 && value.schema !== 2) || !Array.isArray(value.creations) || !Number.isInteger(value.revision) || (value.revision as number) < 0) throw new Error("创作记录版本不兼容或已损坏，已停止覆盖原记录。")
   const ids = new Set<string>()
   const creations: Creation[] = value.creations.map(item => {
     if (!object(item) || typeof item.id !== "string" || !item.id || ids.has(item.id) || typeof item.title !== "string" || !object(item.draft) || !Array.isArray(item.versions) || !item.versions.every(validGeneration)) throw new Error("创作记录格式无效，已停止覆盖原记录。")
@@ -266,11 +298,11 @@ export function restoreWorkspace(value: unknown): CreativeWorkspace {
     const selectedVersionId = completed.some(version => version.id === item.selectedVersionId) ? item.selectedVersionId as string : completed[0]?.id ?? null
     return {
       id: item.id, title: item.title, remoteRevision: typeof item.remoteRevision === "number" ? item.remoteRevision : undefined, localOnly: item.localOnly === true, creationUnknown: item.creationUnknown === true, createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(), updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now(),
-      draft: { prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: restoreFile(draft.documentFile, typeof draft.documentName === "string" && draft.documentName ? draft.documentName : "document.bin"), selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls, image1: restoreFile(draft.image1, "reference-1.png"), image2: restoreFile(draft.image2, "reference-2.png"), image1Url: draft.image1Url as string, image2Url: draft.image2Url as string },
+      draft: { annotationDrafts: restoreAnnotationDrafts(draft.annotationDrafts), documentImageInspection: restoreImageInspection(draft.documentImageInspection), prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: restoreFile(draft.documentFile, typeof draft.documentName === "string" && draft.documentName ? draft.documentName : "document.bin"), selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls, image1: restoreFile(draft.image1, "reference-1.png"), image2: restoreFile(draft.image2, "reference-2.png"), image1Url: draft.image1Url as string, image2Url: draft.image2Url as string },
       selectedVersionId, versions, unread: Boolean(item.unread), draftRevision: Number.isInteger(item.draftRevision) ? item.draftRevision as number : 0, pendingDraftRevision: null,
     }
   })
-  return { schema: 1, revision: value.revision as number, ...(typeof value.lastWriteId === "string" ? { lastWriteId: value.lastWriteId } : {}), creations, activeCreationId: creations.some(creation => creation.id === value.activeCreationId) ? value.activeCreationId as string : creations[0]?.id ?? null }
+  return { schema: 2, revision: value.revision as number, ...(typeof value.lastWriteId === "string" ? { lastWriteId: value.lastWriteId } : {}), creations, activeCreationId: creations.some(creation => creation.id === value.activeCreationId) ? value.activeCreationId as string : creations[0]?.id ?? null }
 }
 
 type EmergencyDraft = Omit<CreationDraft, "image1" | "image2" | "image1Url" | "image2Url" | "documentFile"> & { image1Url?: string; image2Url?: string }
@@ -290,12 +322,12 @@ export interface EmergencyDraftEntry {
 
 /** Synchronous emergency storage contains only draft text/parameters, never files or inline image data. */
 export function emergencyDraftEntry(creation: Creation, previous?: Creation, earlier?: EmergencyDraftEntry): EmergencyDraftEntry {
-  const { prompt, documentName, documentText, selectedMappingId, aspectRatio, quality, useUrls, image1Url, image2Url } = creation.draft
+  const { prompt, documentName, documentText, documentImageInspection, annotationDrafts, selectedMappingId, aspectRatio, quality, useUrls, image1Url, image2Url } = creation.draft
   return {
     id: creation.id, title: creation.title, localOnly: creation.localOnly, createdAt: creation.createdAt, draftRevision: creation.draftRevision,
     isNew: earlier?.isNew ?? !previous,
     baseVersionId: creation.selectedVersionId,
-    draft: { prompt, documentName, documentText, selectedMappingId, aspectRatio, quality, useUrls, ...(!/^data:/i.test(image1Url) ? { image1Url } : {}), ...(!/^data:/i.test(image2Url) ? { image2Url } : {}) },
+    draft: { prompt, documentName, documentText, documentImageInspection, annotationDrafts: restoreAnnotationDrafts(annotationDrafts), selectedMappingId, aspectRatio, quality, useUrls, ...(!/^data:/i.test(image1Url) ? { image1Url } : {}), ...(!/^data:/i.test(image2Url) ? { image2Url } : {}) },
     image1Change: creation.draft.image1 !== previous?.draft.image1 ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.image1) } : earlier?.image1Change,
     image2Change: creation.draft.image2 !== previous?.draft.image2 ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.image2) } : earlier?.image2Change,
     documentChange: creation.draft.documentFile !== previous?.draft.documentFile ? { revision: creation.draftRevision, hasFile: Boolean(creation.draft.documentFile) } : earlier?.documentChange,
@@ -303,15 +335,16 @@ export function emergencyDraftEntry(creation: Creation, previous?: Creation, ear
 }
 
 export function serializeEmergencyDrafts(baseRevision: number, pendingWriteId: string | null, entries: EmergencyDraftEntry[], activeCreationId?: string | null): string {
-  return JSON.stringify({ schema: 1, baseRevision, pendingWriteId, entries, activeCreationId })
+  return JSON.stringify({ schema: 2, baseRevision, pendingWriteId, entries, activeCreationId })
 }
 
 export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string | null, remote: PrivateCreation[] = []): { workspace: CreativeWorkspace; referencesNeedReselect: boolean } {
   const unchanged = { workspace, referencesNeedReselect: false }
   if (!raw) return unchanged
   let saved: unknown
-  try { saved = JSON.parse(raw) } catch { return unchanged }
-  if (!object(saved) || saved.schema !== 1 || !Number.isInteger(saved.baseRevision) || !Array.isArray(saved.entries)) return unchanged
+  try { saved = JSON.parse(raw) } catch { throw new Error("紧急草稿已损坏，已停止覆盖原记录。") }
+  if (!object(saved) || (saved.schema !== 1 && saved.schema !== 2) || !Number.isInteger(saved.baseRevision) || !Array.isArray(saved.entries)) throw new Error("紧急草稿版本不兼容或已损坏，已停止覆盖原记录。")
+  for (const entry of saved.entries) if (object(entry) && object(entry.draft)) restoreAnnotationDrafts(entry.draft.annotationDrafts)
   const ownPendingSave = typeof saved.pendingWriteId === "string" && workspace.revision === (saved.baseRevision as number) + 1 && workspace.lastWriteId === saved.pendingWriteId
   if (workspace.revision !== saved.baseRevision && !ownPendingSave) return unchanged
   let restored = workspace
@@ -339,7 +372,7 @@ export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string
       current.localOnly = value.localOnly === true
       restored = { ...restored, creations: [current, ...restored.creations], activeCreationId: restored.activeCreationId ?? current.id }
     } else if (current.draftRevision > (value.draftRevision as number)) continue
-    const recovered: CreationDraft = { ...current.draft, prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: current.draft.documentFile, selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls }
+    const recovered: CreationDraft = { ...current.draft, annotationDrafts: restoreAnnotationDrafts(draft.annotationDrafts), documentImageInspection: restoreImageInspection(draft.documentImageInspection), prompt: draft.prompt as string, documentName: typeof draft.documentName === "string" ? draft.documentName : "", documentText: typeof draft.documentText === "string" ? draft.documentText : "", documentFile: current.draft.documentFile, selectedMappingId: draft.selectedMappingId as string, aspectRatio: draft.aspectRatio as string, quality: draft.quality as CreationDraft["quality"], useUrls: draft.useUrls }
     for (const key of ["image1Url", "image2Url"] as const) if (typeof draft[key] === "string" && !/^data:/i.test(draft[key])) recovered[key] = draft[key]
     for (const slot of [1, 2] as const) {
       const change = value[`image${slot}Change`]
@@ -414,7 +447,7 @@ export function migrateLegacyWorkspace(historyRaw: string | null, draftRaw: stri
       draft.image2 = legacyReference(oldDraft.image2Preview, "reference-2.png")
     }
   }
-  return { schema: 1, revision: 0, creations, activeCreationId: creations[0].id }
+  return { schema: 2, revision: 0, creations, activeCreationId: creations[0].id }
 }
 
 export class WorkspaceConflictError extends Error {}
@@ -467,12 +500,13 @@ export async function writeWorkspace(workspace: CreativeWorkspace, expectedRevis
       const request = store.get(KEY)
       request.onsuccess = () => {
         const existing = request.result
-        if ((existing !== undefined && (!object(existing) || existing.schema !== 1)) || (existing?.revision ?? 0) !== expectedRevision) {
+        if ((existing !== undefined && (!object(existing) || (existing.schema !== 1 && existing.schema !== 2))) || (existing?.revision ?? 0) !== expectedRevision) {
           failure = new WorkspaceConflictError("另一标签页已更新创作。为避免覆盖，当前修改暂留在本页；请先保留未保存的输入，再刷新。")
           transaction.abort()
           return
         }
         try {
+          if (existing?.schema === 1) store.put(existing, `schema1-backup-${expectedRevision}`)
           store.put({ ...workspaceSnapshot(workspace), revision: expectedRevision + 1, lastWriteId: writeId }, KEY)
         } catch (error) {
           failure = error

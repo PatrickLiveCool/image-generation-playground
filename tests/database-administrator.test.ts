@@ -76,7 +76,7 @@ test("bundled administrator commands use runtime only and resolve a lost commit 
   const scratch = mkdtempSync(path.join(tmpdir(), "image-admin-bundle-")), runtime = path.join(scratch, "runtime"), maintenance = path.join(runtime, "maintenance")
   mkdirSync(path.join(maintenance, "migrations"), { recursive: true })
   const release = { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "a".repeat(40), platform: "linux/amd64",
-    builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 1, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: maintenanceDatabaseContract() }
+    builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 2, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: maintenanceDatabaseContract() }
   const identity = { database: "qintopia_image", current_user: "qintopia_image_app", session_user: "qintopia_image_app", schema: "app", search_path: "app, pg_catalog",
     database_owner: "qintopia_image_migrator", schema_owner: "qintopia_image_migrator", can_connect: true, can_use_schema: true,
     can_create_database_objects: false, can_temp: false, can_create_schema_objects: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false,

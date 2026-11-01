@@ -33,7 +33,8 @@ test("physical contract covers all 13 tables including auth ephemeral tables and
 })
 
 test("missing session.token, verification.value or rateLimit.lastRequest can never pass the physical oracle", async () => {
-  for (const [table, column] of [["session", "token"], ["verification", "value"], ["rateLimit", "lastRequest"], ["schema_migrations", "sha256"]]) {
+  for (const [table, column] of [["session", "token"], ["verification", "value"], ["rateLimit", "lastRequest"], ["schema_migrations", "sha256"],
+    ["provider_settings", "annotationCapabilities"], ["generation_runs", "annotationSnapshot"], ["generation_runs", "annotationExecution"], ["generation_runs", "providerAnnotationCapability"]]) {
     const f = fixture()
     f.metadata.columns = f.metadata.columns.filter(row => row.table_name !== table || row.column_name !== column)
     await assert.rejects(verifyProjectPhysicalSchema(f.client), mismatch)
@@ -49,6 +50,9 @@ test("wrong scalar types, nullability, identity and same-named nonbuiltin types 
     f => { f.metadata.columns.find(row => row.table_name === "session" && row.column_name === "token")!.not_null = false },
     f => { f.metadata.columns.find(row => row.table_name === "account_audit" && row.column_name === "id")!.identity_kind = "" },
     f => { f.metadata.columns.find(row => row.table_name === "user" && row.column_name === "id")!.type_schema = "app" },
+    f => { f.metadata.columns.find(row => row.column_name === "annotationCapabilities")!.not_null = false },
+    f => { f.metadata.columns.find(row => row.column_name === "annotationSnapshot")!.not_null = true },
+    f => { f.metadata.columns.find(row => row.column_name === "annotationExecution")!.data_type = "text" },
   ]
   for (const change of changes) { const f = fixture(); change(f); await assert.rejects(verifyProjectPhysicalSchema(f.client), mismatch) }
 })

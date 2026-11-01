@@ -24,7 +24,7 @@ test("actual IndexedDB and hook hydration keep account workspaces, emergency dra
     requests.push(String(url))
     assert.equal(init?.body, undefined)
     if (String(url) === "/api/creations") return Response.json({ creations: remoteAccount === "account-a" ? [{ id: "creation-a", title: "A", revision: 1, createdAt: 100, updatedAt: 100, versions: [] }] : [] })
-    return Response.json({ revision: 1, configured: true, apiMode: "images", mappings: [{ id: "shared", name: "共用模型", aspectRatios: ["square"] }] })
+    return Response.json({ revision: 1, configured: true, apiMode: "images", mappings: [{ id: "shared", name: "共用模型", aspectRatios: ["square"], annotation: { available: false, expression: null, maxInputImages: 2, reason: "未核验" } }] })
   })
   const { createRoot } = await import("react-dom/client")
   const a = addCreation(emptyWorkspace(), newCreation({ prompt: "A saved draft" }, "creation-a"))

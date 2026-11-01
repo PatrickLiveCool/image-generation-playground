@@ -1,10 +1,13 @@
 import type { Generation, Quality } from "@/components/image-combiner/types"
+import type { AnnotationDraft } from "./image-annotations"
 
 export interface CreationDraft {
   prompt: string
   documentName?: string
   documentText?: string
   documentFile?: File | null
+  documentImageInspection?: "none" | "present" | "unknown"
+  annotationDrafts?: Record<string, AnnotationDraft>
   selectedMappingId: string
   aspectRatio: string
   quality: Quality
@@ -34,7 +37,7 @@ export interface Creation {
 }
 
 export interface CreativeWorkspace {
-  schema: 1
+  schema: 2
   revision: number
   lastWriteId?: string
   activeCreationId: string | null

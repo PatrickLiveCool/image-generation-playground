@@ -16,7 +16,7 @@ function canonical(value: unknown): string {
 function payload(): ProjectBackupPayload {
   const value: Omit<ProjectBackupPayload, "contentSha256"> = {
     schema: 1, application: "qintopia-image", database: "qintopia_image", schemaName: "app", createdAt: "2026-10-29T01:00:00.000Z",
-    release: { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "a".repeat(40), platform: "linux/amd64", builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 1, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: policy.database },
+    release: { schema: 2, application: "qintopia-image", version: "v0.3.0", revision: "a".repeat(40), platform: "linux/amd64", builtAt: "2026-10-29T00:00:00Z", browserWorkspaceSchema: 2, assetCapabilityVersion: 1, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: policy.database },
     migrations: Object.entries(approvedMigrations).map(([name, sha256]) => ({ name, sha256 })), storage: projectBackupStorage(environment), secrets: projectRecoverySecrets(environment),
     tables: { user: [], account: [], account_audit: [], provider_settings: [], provider_config_audit: [], provider_request_slots: [], creations: [], generation_runs: [], private_assets: [] },
   }

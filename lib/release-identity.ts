@@ -7,7 +7,7 @@ interface ReleaseIdentityBase {
   revision: string
   platform: "linux/amd64"
   builtAt: string
-  browserWorkspaceSchema: 1
+  browserWorkspaceSchema: 1 | 2
   assetCapabilityVersion: 1
 }
 export interface ReleaseDatabaseContract {
@@ -17,7 +17,7 @@ export interface ReleaseDatabaseContract {
   maxVersion: string
   migrations: Array<{ name: string; sha256: string }>
 }
-export interface LegacyReleaseIdentity extends ReleaseIdentityBase { schema: 1 }
+export interface LegacyReleaseIdentity extends ReleaseIdentityBase { schema: 1; browserWorkspaceSchema: 1 }
 export interface AccountReleaseIdentity extends ReleaseIdentityBase {
   schema: 2
   databaseMode: "postgresql"
@@ -60,15 +60,15 @@ export function validateReleaseIdentity(value: unknown): ReleaseIdentity {
     || value.platform !== "linux/amd64"
     || typeof value.builtAt !== "string" || !UTC.test(value.builtAt) || !Number.isFinite(Date.parse(value.builtAt))
     || new Date(value.builtAt).toISOString().slice(0, 19) !== value.builtAt.slice(0, 19)
-    || value.browserWorkspaceSchema !== 1 || value.assetCapabilityVersion !== 1) throw new Error("Release identity is invalid")
+    || ![1, 2].includes(value.browserWorkspaceSchema as number) || value.assetCapabilityVersion !== 1) throw new Error("Release identity is invalid")
   const base: ReleaseIdentityBase = {
     application: "qintopia-image", version: value.version, revision: value.revision,
     platform: "linux/amd64", builtAt: value.builtAt,
-    browserWorkspaceSchema: 1, assetCapabilityVersion: 1,
+    browserWorkspaceSchema: value.browserWorkspaceSchema as 1 | 2, assetCapabilityVersion: 1,
   }
   if (value.schema === 1) {
-    if ("database" in value || "databaseMode" in value || "assetAccessProtocol" in value) throw new Error("Release identity is invalid")
-    return { ...base, schema: 1 }
+    if (value.browserWorkspaceSchema !== 1 || "database" in value || "databaseMode" in value || "assetAccessProtocol" in value) throw new Error("Release identity is invalid")
+    return { ...base, schema: 1, browserWorkspaceSchema: 1 }
   }
   if (value.databaseMode !== "postgresql" || value.assetAccessProtocol !== "account-private-v1") throw new Error("Release identity is invalid")
   return { ...base, schema: 2, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1", database: validateReleaseDatabaseContract(value.database) }

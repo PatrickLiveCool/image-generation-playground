@@ -1,3 +1,4 @@
+import { validateAnnotationSnapshot, composeAnnotatedPrompt, type AnnotationSnapshot } from "./image-annotations"
 import { createHash } from "node:crypto"
 import { AccountError, invalidInput } from "./auth/errors"
 import { composePrompt, MAX_DOCUMENT_CHARS } from "./document-context"
@@ -8,7 +9,7 @@ import type { RunCommand } from "./private-workspace-records"
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 export const MAX_REFERENCE_BYTES = 10 * 1024 * 1024
-const FIELDS = new Set(["creationId", "clientRequestId", "parentVersionId", "mappingId", "configRevision", "prompt", "aspectRatio", "quality", "mode", "image1", "image2", "image1Url", "image2Url", "document", "documentName", "documentText"])
+const FIELDS = new Set(["creationId", "clientRequestId", "parentVersionId", "mappingId", "configRevision", "prompt", "aspectRatio", "quality", "mode", "image1", "image2", "image1Url", "image2Url", "document", "documentName", "documentText", "annotationSnapshot"])
 export type PrivateReference = { image: ImageBytes } | { source: string }
 export type ParsedPrivateGeneration = { command: RunCommand; references: PrivateReference[]; document?: ParsedDocument; effectivePrompt: string }
 export const bytesHash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex")
@@ -91,7 +92,14 @@ export async function parsePrivateGenerationForm(form: FormData): Promise<Parsed
   if (mappingId !== mappingId.trim() || /[\u0000-\u001f\u007f]/.test(mappingId)) throw invalidInput("请重新选择模型。")
   const revision = text(form, "configRevision", 10)
   if (!/^[1-9]\d*$/.test(revision) || !Number.isSafeInteger(Number(revision)) || Number(revision) >= 2_147_483_647) throw invalidInput("模型配置版本无效，请刷新目录。")
-  const prompt = text(form, "prompt", 5000)
+  let annotationSnapshot: AnnotationSnapshot | undefined
+  if (form.has("annotationSnapshot")) {
+    try { annotationSnapshot = validateAnnotationSnapshot(JSON.parse(text(form, "annotationSnapshot", 128 * 1024))) }
+    catch { throw invalidInput("批注快照无效，请检查区域和说明后重新提交。") }
+    if (!parentVersionId || annotationSnapshot.baseVersionId !== parentVersionId) throw invalidInput("批注必须对应本次所选基准版本。")
+    if (["image1", "image2", "image1Url", "image2Url"].some(key => form.has(key))) throw invalidInput("批注的原图和辅助图已占满两张输入，请移除补充参考图。")
+  }
+  const prompt = text(form, "prompt", 5000, Boolean(annotationSnapshot))
   const aspectRatio = text(form, "aspectRatio", 16)
   const quality = text(form, "quality", 8)
   const requestedMode = text(form, "mode", 16)
@@ -127,15 +135,19 @@ export async function parsePrivateGenerationForm(form: FormData): Promise<Parsed
     document = await parseDocument(file)
   } else if (name || restoredText) {
     if (!name.trim() || !restoredText.trim() || /[\u0000-\u001f\u007f]/.test(name)) throw invalidInput("恢复的文档名称和文字不完整。")
-    document = { name, mediaType: "text/plain", bytes: Buffer.from(restoredText), text: restoredText, images: [] }
+    document = { name, mediaType: "text/plain", bytes: Buffer.from(restoredText), text: annotationSnapshot ? restoredText.replace(/\r\n?/g, "\n").trim() : restoredText, images: [], imageInspection: "none" }
   }
-  const effectivePrompt = composePrompt(prompt, document?.name ?? "", document?.text ?? "")
+  if (annotationSnapshot && document && document.imageInspection !== "none") throw invalidInput("批注仅支持确认无图片的文档，请移除文档或改用纯 TXT。")
+  let annotatedPrompt: string
+  try { annotatedPrompt = annotationSnapshot ? composeAnnotatedPrompt(prompt, annotationSnapshot) : prompt }
+  catch { throw invalidInput("批注与整体要求合计不能超过 5000 字。") }
+  const effectivePrompt = composePrompt(annotatedPrompt, document?.name ?? "", document?.text ?? "")
   if (effectivePrompt.length > 5000) throw invalidInput("提示词和文档上下文合计不能超过 5000 字。")
-  const imageCount = Number(Boolean(parentVersionId)) + references.length + (document?.images.length ?? 0)
+  const imageCount = (annotationSnapshot ? 2 : Number(Boolean(parentVersionId))) + references.length + (document?.images.length ?? 0)
   if (imageCount > 2) throw invalidInput("原始基准、补充参考图和文档图片合计最多两张，请精简后提交。")
   if (requestedMode === "image-editing" && !imageCount) throw invalidInput("修改图片需要有效基准或参考图。")
   const mode = imageCount ? "image-editing" : "text-to-image"
-  const command: RunCommand = { creationId, clientRequestId, fingerprint: "", parentVersionId, mappingId, configRevision: Number(revision), prompt, aspectRatio, quality, mode }
+  const command: RunCommand = { creationId, clientRequestId, fingerprint: "", parentVersionId, mappingId, configRevision: Number(revision), prompt, aspectRatio, quality, mode, ...(annotationSnapshot ? { annotationSnapshot } : {}) }
   command.fingerprint = bytesHash(JSON.stringify({ ...command, references: referenceFingerprints, document: document ? { name: document.name, sha256: bytesHash(document.bytes), mediaType: document.mediaType } : null }))
   return { command, references, document, effectivePrompt }
 }

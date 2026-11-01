@@ -1,4 +1,8 @@
-import { randomUUID } from "node:crypto"
+import { randomUUID, createHash } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
+import { validateAnnotationSnapshot, serializeAnnotationSnapshot, composeAnnotatedPrompt } from "./image-annotations"
+import { validateAnnotationExecution, type AnnotationExecution } from "./annotation-execution"
+import { validateResolvedAnnotationCapability } from "./annotation-capability"
 import type { PoolClient } from "pg"
 import { aspectRatiosForModel } from "../components/image-combiner/model-catalog"
 import { AccountError, invalidInput } from "./auth/errors"
@@ -12,13 +16,14 @@ import { resolveGenerationProviderInTransaction } from "./provider-configuration
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HASH = /^[0-9a-f]{64}$/
-const FAILURE_CODES = new Set(["INPUT_SAVE_FAILED", "GENERATION_FAILED", "GENERATION_UNKNOWN", "OUTPUT_SAVE_FAILED", "MANIFEST_SAVE_FAILED", "METADATA_SAVE_FAILED", "REQUEST_ABORTED", "REPAIR_OUTPUT_MISSING", "REPAIR_INVALID_OUTPUT", "BASE_VERSION_UNAVAILABLE", "REFERENCE_INVALID", "ACCOUNT_UNAVAILABLE", "MODEL_OUTPUT_INVALID", "PROVIDER_AUTH_REJECTED", "PROVIDER_REQUEST_REJECTED", "PROVIDER_RATE_LIMITED", "PROVIDER_UPSTREAM_FAILED", "INPUT_READ_FAILED"])
+const FAILURE_CODES = new Set(["INPUT_SAVE_FAILED", "GENERATION_FAILED", "GENERATION_UNKNOWN", "OUTPUT_SAVE_FAILED", "MANIFEST_SAVE_FAILED", "METADATA_SAVE_FAILED", "REQUEST_ABORTED", "REPAIR_OUTPUT_MISSING", "REPAIR_INVALID_OUTPUT", "BASE_VERSION_UNAVAILABLE", "REFERENCE_INVALID", "ACCOUNT_UNAVAILABLE", "MODEL_OUTPUT_INVALID", "PROVIDER_AUTH_REJECTED", "PROVIDER_REQUEST_REJECTED", "PROVIDER_RATE_LIMITED", "PROVIDER_UPSTREAM_FAILED", "INPUT_READ_FAILED", "ANNOTATION_INPUT_INVALID"])
 const RUN_STATUSES = new Set<PrivateRunStatus>(["preparing", "generating", "saving", "complete", "failed", "unknown", "save_pending"])
 type CreationRow = { id: string; title: string; revision: number; nextVersion: number; createdAt: Date; updatedAt: Date }
 type RunRow = Omit<PrivateRun, "createdAt" | "updatedAt" | "imageUrl" | "document" | "failureCode"> & {
   ownerId: string; clientRequestId: string; fingerprint: string; createdAt: Date; updatedAt: Date; deadlineAt: Date
   manifestKey: string; outputKey: string; outputAssetId: string; failureCode: string | null
   providerBaseUrl: string; providerApiMode: PrivateRunRecord["provider"]["apiMode"]; providerModelId: string; providerRevision: number
+  annotationExecution: AnnotationExecution | null; providerAnnotationCapability: PrivateRunRecord["provider"]["annotationCapability"]
   documentAssetId?: string | null; documentName?: string | null
 }
 const runSelect = `SELECT r.*, c.revision AS "creationRevision", d.id AS "documentAssetId", d.name AS "documentName"
@@ -42,18 +47,23 @@ function title(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(value)) throw invalidInput("创作名称须为 1–60 个字符。")
   return value.trim()
 }
+function capabilityVerification(row: RunRow) {
+  return { sha256: (value: string) => createHash("sha256").update(value, "utf8").digest("hex"), mappingId: row.mappingId, configurationRevision: row.providerRevision }
+}
 function toRecord(row: RunRow): PrivateRunRecord {
   const expired = row.deadlineAt.getTime() <= Date.now() && ["preparing", "generating", "saving"].includes(row.status)
   const visible: PrivateRun = {
     id: row.id, creationId: row.creationId, creationRevision: row.creationRevision, version: row.version, parentVersionId: row.parentVersionId,
     status: expired ? "unknown" : row.status, imageUrl: row.status === "complete" ? `/api/images/${row.outputAssetId}` : null,
+    annotationSnapshot: row.annotationSnapshot ? validateAnnotationSnapshot(row.annotationSnapshot) : null,
     prompt: row.prompt, mappingId: row.mappingId, modelLabel: row.modelLabel, aspectRatio: row.aspectRatio,
     quality: row.quality, mode: row.mode, createdAt: row.createdAt.getTime(), updatedAt: row.updatedAt.getTime(),
     ...(row.failureCode && FAILURE_CODES.has(row.failureCode) ? { failureCode: row.failureCode } : {}),
     ...(row.documentAssetId ? { document: { assetId: row.documentAssetId, name: row.documentName || "未命名文档" } } : {}),
   }
   return { public: visible, ownerId: row.ownerId, fingerprint: row.fingerprint, deadlineAt: row.deadlineAt.getTime(), manifestKey: row.manifestKey, outputKey: row.outputKey, outputAssetId: row.outputAssetId,
-    provider: { baseUrl: row.providerBaseUrl, apiMode: row.providerApiMode, modelId: row.providerModelId, revision: row.providerRevision } }
+    annotationExecution: row.annotationExecution ? validateAnnotationExecution(row.annotationExecution, capabilityVerification(row)) : null,
+    provider: { baseUrl: row.providerBaseUrl, apiMode: row.providerApiMode, modelId: row.providerModelId, revision: row.providerRevision, ...(row.providerAnnotationCapability ? { annotationCapability: validateResolvedAnnotationCapability(row.providerAnnotationCapability, capabilityVerification(row)) } : {}) } }
 }
 async function findRun(client: PoolClient, ownerId: string, id: string, lock = false): Promise<RunRow | undefined> {
   const { rows: [row] } = await client.query<RunRow>(`${runSelect} WHERE r."ownerId"=$1 AND r.id=$2${lock ? " FOR UPDATE OF r" : ""}`, [ownerId, id])
@@ -109,13 +119,20 @@ export async function renamePrivateCreation(headers: Headers, id: string, body: 
 }
 
 function validateCommand(command: RunCommand): RunCommand {
-  const value = exactBody(command, ["creationId", "clientRequestId", "fingerprint", "parentVersionId", "mappingId", "configRevision", "prompt", "aspectRatio", "quality", "mode"])
+  const value = exactBody(command, ["creationId", "clientRequestId", "fingerprint", "parentVersionId", "mappingId", "configRevision", "prompt", "aspectRatio", "quality", "mode"], ["annotationSnapshot"])
   if (typeof value.fingerprint !== "string" || !HASH.test(value.fingerprint) || typeof value.mappingId !== "string" || !value.mappingId || value.mappingId.length > 128 ||
       !Number.isSafeInteger(value.configRevision) || (value.configRevision as number) < 1 || (value.configRevision as number) >= 2_147_483_647 ||
       typeof value.prompt !== "string" || value.prompt.length > 5000 || value.prompt.includes("\u0000") ||
       typeof value.aspectRatio !== "string" || !value.aspectRatio || value.aspectRatio.length > 32 ||
       !["auto", "low", "medium", "high"].includes(value.quality as string) || !["text-to-image", "image-editing"].includes(value.mode as string)) throw invalidInput("生成参数无效。")
   const normalized = { ...command, creationId: identifier(command.creationId), clientRequestId: identifier(command.clientRequestId), parentVersionId: command.parentVersionId === null ? null : identifier(command.parentVersionId) }
+  if (command.annotationSnapshot != null) {
+    try { normalized.annotationSnapshot = validateAnnotationSnapshot(command.annotationSnapshot) }
+    catch { throw invalidInput("批注快照无效。") }
+    if (!normalized.parentVersionId || normalized.annotationSnapshot.baseVersionId !== normalized.parentVersionId) throw invalidInput("批注必须对应所选基准版本。")
+    try { composeAnnotatedPrompt(normalized.prompt, normalized.annotationSnapshot) }
+    catch { throw invalidInput("批注与整体要求合计不能超过 5000 字。") }
+  } else delete normalized.annotationSnapshot
   if (normalized.parentVersionId && normalized.mode !== "image-editing") throw invalidInput("历史版本修改必须提交原始图片。")
   return normalized
 }
@@ -140,15 +157,26 @@ export async function acceptPrivateRun(identity: AccountIdentity, command: RunCo
     // 新创作只会由明确创建或首次提交建立；失败受理会回滚此插入。
     await client.query('INSERT INTO app.creations ("ownerId",id,title) VALUES ($1,$2,$3) ON CONFLICT ("ownerId",id) DO NOTHING', [ownerId, input.creationId, "未命名创作"])
     const { rows: [creation] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2 FOR UPDATE', [ownerId, input.creationId])
-    if (input.parentVersionId) await baseInTransaction(client, ownerId, input.creationId, input.parentVersionId)
+    // A concurrent identical request may have committed while this creation lock waited.
+    // Recheck it before consulting current provider configuration or rejecting stale evidence.
+    const concurrent = await findRun(client, ownerId, input.clientRequestId)
+    if (concurrent) {
+      if (concurrent.fingerprint !== input.fingerprint) throw new AccountError("GENERATION_REQUEST_CONFLICT", 409, "该请求标识已用于其他生成内容，请使用新的请求。")
+      return { acquired: false, record: toRecord(concurrent) }
+    }
+    if (input.parentVersionId) {
+      const base = await baseInTransaction(client, ownerId, input.creationId, input.parentVersionId)
+      if (input.annotationSnapshot && base.id !== input.annotationSnapshot.image.assetId) throw invalidInput("批注图片与所选基准版本不一致。")
+    }
     const provider = await resolveGenerationProviderInTransaction(client, input.mappingId, input.configRevision)
+    if (input.annotationSnapshot && !provider.annotationCapability) throw new AccountError("ANNOTATION_CAPABILITY_UNAVAILABLE", 409, "当前模型尚未确认支持原图和批注图两张输入，请选择支持批注的模型。")
     if (!aspectRatiosForModel(provider.mapping.modelId).includes(input.aspectRatio)) throw invalidInput("所选模型不支持该图片比例。")
     const slot = await acquireGenerationSlotInTransaction(client, { userId: ownerId, requestId: input.clientRequestId, fingerprint: input.fingerprint })
     if (!slot.acquired) throw new AccountError("GENERATION_REQUEST_CONFLICT", 409, "该请求已受理，请查询原任务状态。")
     const prefix = privateRunPrefix(ownerId, input.creationId, input.clientRequestId), outputAssetId = randomUUID()
-    await client.query(`INSERT INTO app.generation_runs ("ownerId",id,"creationId","clientRequestId",fingerprint,version,"parentVersionId",status,prompt,"mappingId","modelLabel","aspectRatio",quality,mode,"providerBaseUrl","providerApiMode","providerModelId","providerRevision","manifestKey","outputKey","outputAssetId","deadlineAt")
-      SELECT $1,$2,$3,$2,$4,$5,$6,'preparing',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,"deadlineAt" FROM app.provider_request_slots WHERE "userId"=$1 AND "requestId"=$2`,
-    [ownerId, input.clientRequestId, input.creationId, input.fingerprint, creation.nextVersion, input.parentVersionId, input.prompt, input.mappingId, provider.mapping.name, input.aspectRatio, input.quality, input.mode, provider.settings.baseUrl, provider.settings.apiMode, provider.mapping.modelId, provider.revision, `${prefix}/manifest.json`, `${prefix}/outputs/final`, outputAssetId])
+    await client.query(`INSERT INTO app.generation_runs ("ownerId",id,"creationId","clientRequestId",fingerprint,version,"parentVersionId",status,prompt,"mappingId","modelLabel","aspectRatio",quality,mode,"providerBaseUrl","providerApiMode","providerModelId","providerRevision","manifestKey","outputKey","outputAssetId","annotationSnapshot","providerAnnotationCapability","deadlineAt")
+      SELECT $1,$2,$3,$2,$4,$5,$6,'preparing',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,"deadlineAt" FROM app.provider_request_slots WHERE "userId"=$1 AND "requestId"=$2`,
+    [ownerId, input.clientRequestId, input.creationId, input.fingerprint, creation.nextVersion, input.parentVersionId, input.prompt, input.mappingId, provider.mapping.name, input.aspectRatio, input.quality, input.mode, provider.settings.baseUrl, provider.settings.apiMode, provider.mapping.modelId, provider.revision, `${prefix}/manifest.json`, `${prefix}/outputs/final`, outputAssetId, input.annotationSnapshot ? JSON.stringify(input.annotationSnapshot) : null, input.annotationSnapshot ? JSON.stringify(provider.annotationCapability) : null])
     await client.query('UPDATE app.creations SET "nextVersion"="nextVersion"+1,revision=revision+1,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2', [ownerId, input.creationId])
     return { acquired: true, record: toRecord((await findRun(client, ownerId, input.clientRequestId))!), settings: provider.settings }
   })
@@ -185,6 +213,7 @@ export async function setPrivateRunStatus(ownerId: string, runId: string, status
     const row = await findRun(client, ownerId, id, true)
     if (!row) return notFound()
     if (row.status === "complete") return
+    if (row.annotationSnapshot && ["generating", "saving"].includes(status) && !row.annotationExecution) throw invalidInput("批注输入尚未冻结，不能开始生成。")
     const progress = ["preparing", "generating", "saving"]
     if (progress.includes(status) && (!progress.includes(row.status) || progress.indexOf(status) < progress.indexOf(row.status))) return
     if ((row.status === "save_pending" || row.status === "unknown") && status === "failed") return
@@ -233,11 +262,44 @@ export async function completePrivateRun(ownerId: string, runId: string, assets:
       return toRecord((await findRun(client, ownerId, id))!).public
     }
     validAssets(row, assets)
+    if (row.annotationSnapshot) {
+      if (!row.annotationExecution) throw invalidInput("批注任务缺少已冻结的输入记录。")
+      const execution = validateExecutionForRun(row, row.annotationExecution)
+      const images = assets.filter(asset => asset.kind === "image" && asset.key !== row.outputKey)
+      if (images.length !== 2 || execution.inputs.some(input => !images.some(asset => asset.id === input.id && asset.key === input.key && asset.sha256 === input.sha256 && asset.byteLength === input.byteLength))) throw invalidInput("批注输入与已冻结记录不一致。")
+    }
     for (const asset of assets) await client.query(`INSERT INTO app.private_assets ("ownerId",id,"creationId","runId",key,kind,"mediaType","byteLength",sha256,name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [ownerId, asset.id, row.creationId, id, asset.key, asset.kind, asset.mediaType, asset.byteLength, asset.sha256, asset.name ?? null])
     await client.query('UPDATE app.generation_runs SET status=\'complete\',"failureCode"=NULL,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2', [ownerId, id])
     // unknown 也可以由确定存在且校验过的输出修复为 finished，随后立即释放受理槽。
     await client.query('UPDATE app.provider_request_slots SET status=\'finished\' WHERE "userId"=$1 AND "requestId"=$2', [ownerId, row.clientRequestId])
     await client.query('UPDATE app.creations SET revision=revision+1,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2', [ownerId, row.creationId])
     return toRecord((await findRun(client, ownerId, id))!).public
+  })
+}
+
+function validateExecutionForRun(row: RunRow, value: unknown): AnnotationExecution {
+  const execution = validateAnnotationExecution(value, capabilityVerification(row))
+  const snapshot = row.annotationSnapshot && validateAnnotationSnapshot(row.annotationSnapshot)
+  const prefix = privateRunPrefix(row.ownerId, row.creationId, row.id)
+  if (!snapshot || snapshot.baseVersionId !== row.parentVersionId || execution.original.assetId !== snapshot.image.assetId ||
+      execution.snapshotSha256 !== createHash("sha256").update(serializeAnnotationSnapshot(snapshot)).digest("hex") ||
+      !isDeepStrictEqual(execution.capability, row.providerAnnotationCapability) ||
+      execution.capability.configurationRevision !== row.providerRevision ||
+      (["width", "height", "orientation", "pages"] as const).some(key => execution.original[key] !== snapshot.image[key]) ||
+      execution.inputs.some((input, index) => input.key !== `${prefix}/inputs/reference-${index + 1}`)) throw invalidInput("批注执行记录与受理内容不一致。")
+  return execution
+}
+
+/** 两个输入对象成功保存后只允许一次冻结；重试不能覆盖已冻结证据。 */
+export async function freezePrivateAnnotationExecution(ownerId: string, runId: string, value: AnnotationExecution): Promise<void> {
+  const id = identifier(runId)
+  await withTransaction(async client => {
+    const row = await findRun(client, ownerId, id, true)
+    if (!row) return notFound()
+    if (row.status !== "preparing" || row.annotationExecution) throw new AccountError("ANNOTATION_EXECUTION_CONFLICT", 409, "批注输入已经冻结或任务已结束，不能再次覆盖。")
+    const execution = validateExecutionForRun(row, value)
+    const base = await baseInTransaction(client, ownerId, row.creationId, row.parentVersionId!)
+    if (base.id !== execution.original.assetId || base.sha256 !== execution.original.sha256 || base.byteLength !== execution.original.byteLength) throw invalidInput("原始图片记录与批注执行记录不一致。")
+    await client.query('UPDATE app.generation_runs SET "annotationExecution"=$3::jsonb,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2', [ownerId, id, JSON.stringify(execution)])
   })
 }

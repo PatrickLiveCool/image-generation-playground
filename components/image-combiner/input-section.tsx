@@ -60,6 +60,8 @@ interface InputSectionProps {
   baseGeneration?: Generation
   pendingGeneration?: Generation
   submitLabel: string
+  annotationContent?: React.ReactNode
+  hasAnnotations?: boolean
 }
 
 export const InputSection = memo(function InputSection({
@@ -70,11 +72,11 @@ export const InputSection = memo(function InputSection({
   canGenerate, onGenerate, onClearAll, onImageUpload, onUrlChange, onClearImage,
   onDocumentUpload, onClearDocument,
   onKeyDown, onPromptPaste, onImageFullscreen, promptTextareaRef,
-  baseGeneration, pendingGeneration, submitLabel,
+  baseGeneration, pendingGeneration, submitLabel, annotationContent, hasAnnotations,
 }: InputSectionProps) {
   const pending = Boolean(pendingGeneration)
   const editing = Boolean(baseGeneration?.imageUrl)
-  const hasInput = Boolean(prompt.trim() || documentText.trim() || documentFile || image1Preview || image2Preview || image1Url || image2Url)
+  const hasInput = Boolean(hasAnnotations || prompt.trim() || documentText.trim() || documentFile || image1Preview || image2Preview || image1Url || image2Url)
   const referenceSlots: Array<1 | 2> = editing && !image2Preview && !image2Url ? [1] : [1, 2]
 
   const uploadFile = useCallback((event: React.ChangeEvent<HTMLInputElement>, slot: 1 | 2) => {
@@ -148,6 +150,10 @@ export const InputSection = memo(function InputSection({
           style={{ fontSize: "16px", WebkitUserSelect: "text", userSelect: "text" }}
         />
 
+      </fieldset>
+      {annotationContent}
+      <fieldset disabled={pending} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0 disabled:opacity-70">
+
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-medium text-gray-300">背景文档（可选）</p>
@@ -173,7 +179,7 @@ export const InputSection = memo(function InputSection({
               <button type="button" title="切换输入方式会清空当前参考图" onClick={() => setUseUrls(true)} className={cn("px-2 py-1 text-xs", useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>链接</button>
             </div>
           </div>
-          {editing && referenceSlots.length > 1 && <p className="text-[11px] leading-relaxed text-amber-300">基准图已自动加入，请保留一张补充参考图后提交。</p>}
+          {hasAnnotations ? <p className="text-[11px] leading-relaxed text-amber-300">区域批注已使用原图与标注图两个输入。补充参考图会保留，请移除后统一提交。</p> : editing && referenceSlots.length > 1 && <p className="text-[11px] leading-relaxed text-amber-300">基准图已自动加入，请保留一张补充参考图后提交。</p>}
           {useUrls ? (
             <div className="space-y-2">
               {referenceSlots.map(slot => {

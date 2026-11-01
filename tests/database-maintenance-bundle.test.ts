@@ -28,7 +28,7 @@ test("bundled Node CLI runs without tsx and rejects extra arguments, altered SQL
     assert.equal(described.status, 0, described.stderr)
     const descriptor = JSON.parse(described.stdout)
     assert.equal(descriptor.protocol, "account-private-v1")
-    assert.equal(descriptor.database.migrations.length, 4)
+    assert.equal(descriptor.database.migrations.length, 5)
     assert.deepEqual(descriptor.commands, ["describe", "preflight", "migrate", "verify", "backup", "restore-preflight", "restore", "verify-restore", "bootstrap-admin", "verify-bootstrap-admin"])
     assert.equal(descriptor.connectionBudget.total, 9)
     for (const args of [[], ["unknown"], ["describe", "--sql", "DROP DATABASE unrelated"]]) {

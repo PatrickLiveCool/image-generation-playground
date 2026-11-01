@@ -1,3 +1,4 @@
+import { validateAnnotationSnapshot } from "./image-annotations"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "./account-client"
 import type { PrivateCreation, PrivateRun } from "./private-workspace-types"
 
@@ -7,6 +8,13 @@ export class PrivateWorkspaceError extends Error {
 
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object") }
 function validRun(value: unknown): value is PrivateRun {
+  if (record(value)) {
+    try {
+      const snapshot = value.annotationSnapshot == null ? null : validateAnnotationSnapshot(value.annotationSnapshot)
+      if (snapshot && snapshot.baseVersionId !== value.parentVersionId) return false
+      value.annotationSnapshot = snapshot
+    } catch { return false }
+  }
   return record(value) && typeof value.id === "string" && typeof value.creationId === "string"
     && Number.isSafeInteger(value.creationRevision) && Number(value.creationRevision) >= 1
     && Number.isSafeInteger(value.version) && (value.parentVersionId === null || typeof value.parentVersionId === "string")

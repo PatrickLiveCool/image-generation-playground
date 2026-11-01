@@ -2,7 +2,11 @@
 const nextConfig = {
   output: "standalone",
   // 保留 Node COS SDK 的独立模块边界，由 standalone 追踪并携带固定版本。
-  serverExternalPackages: ["cos-nodejs-sdk-v5"],
+  serverExternalPackages: ["cos-nodejs-sdk-v5", "pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  // PDF.js 以运行时相对路径加载 worker，必须显式随独立制品携带。
+  outputFileTracingIncludes: {
+    "/api/{documents/preview,generate-image}": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
+  },
   async headers() {
     return ["/", "/login", "/change-password", "/admin/:path*", "/api/account/:path*", "/api/admin/:path*", "/api/auth/:path*", "/api/creations/:path*", "/api/runs/:path*", "/api/images/:path*", "/api/documents/:path*", "/api/generate-image"].map(source => ({
       source,

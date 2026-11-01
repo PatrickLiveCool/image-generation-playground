@@ -17,12 +17,12 @@ export const MAINTENANCE_COMMANDS = ["describe", "preflight", "migrate", "verify
 export type MaintenanceCommand = typeof MAINTENANCE_COMMANDS[number]
 export const MAINTENANCE_CONNECTION_BUDGET = Object.freeze({ applicationProcesses: 2, perApplication: 4, maintenance: 1, total: 9 })
 export type MaintenanceDatabaseContract = {
-  name: "qintopia_image"; schema: "app"; minVersion: "0004"; maxVersion: "0004"
+  name: "qintopia_image"; schema: "app"; minVersion: "0005"; maxVersion: "0005"
   migrations: { name: string; sha256: string }[]
 }
 export type MaintenanceRelease = {
   schema: 2; application: "qintopia-image"; version: string; revision: string; platform: "linux/amd64"; builtAt: string
-  browserWorkspaceSchema: 1; assetCapabilityVersion: 1; databaseMode: "postgresql"; assetAccessProtocol: "account-private-v1"
+  browserWorkspaceSchema: 2; assetCapabilityVersion: 1; databaseMode: "postgresql"; assetAccessProtocol: "account-private-v1"
   database: MaintenanceDatabaseContract
 }
 type Client = DatabaseInspectionClient & { release: () => void }
@@ -45,7 +45,7 @@ function exact(value: unknown, keys: string[]): value is Record<string, unknown>
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === [...keys].sort().join(","))
 }
 export function maintenanceDatabaseContract(): MaintenanceDatabaseContract {
-  return { name: "qintopia_image", schema: "app", minVersion: "0004", maxVersion: "0004",
+  return { name: "qintopia_image", schema: "app", minVersion: "0005", maxVersion: "0005",
     migrations: Object.entries(approvedMigrations).sort(([a], [b]) => a.localeCompare(b)).map(([name, sha256]) => ({ name, sha256 })) }
 }
 
@@ -57,7 +57,7 @@ export function validateMaintenanceRelease(value: unknown): MaintenanceRelease {
       typeof value.version !== "string" || !/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(value.version) ||
       typeof value.revision !== "string" || !/^[0-9a-f]{40}$/.test(value.revision) ||
       typeof value.builtAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value.builtAt) || !Number.isFinite(Date.parse(value.builtAt)) ||
-      value.browserWorkspaceSchema !== 1 || value.assetCapabilityVersion !== 1 || value.databaseMode !== "postgresql" || value.assetAccessProtocol !== "account-private-v1" ||
+      value.browserWorkspaceSchema !== 2 || value.assetCapabilityVersion !== 1 || value.databaseMode !== "postgresql" || value.assetAccessProtocol !== "account-private-v1" ||
       !exact(value.database, ["name", "schema", "minVersion", "maxVersion", "migrations"]) ||
       value.database.name !== expected.name || value.database.schema !== expected.schema || value.database.minVersion !== expected.minVersion || value.database.maxVersion !== expected.maxVersion ||
       !Array.isArray(value.database.migrations) || value.database.migrations.length !== expected.migrations.length ||

@@ -2,6 +2,7 @@ import type { ProviderApiMode, ProviderModel } from "@/lib/api-provider-types"
 import type { AdminProviderConfiguration, ProviderConfigurationInput, PublicModelCatalog } from "@/lib/provider-configuration-types"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "@/lib/account-client"
 import { ALL_ASPECT_RATIO_VALUES } from "@/components/image-combiner/model-catalog"
+import { validateAnnotationCapabilities, validatePublicAnnotationCapability, type DisableAnnotationCapabilityInput, type PublicAnnotationCapability, type RecordAnnotationCapabilityInput } from "@/lib/annotation-capability"
 
 export class ProviderConfigurationError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -95,6 +96,9 @@ function readAdmin(value: unknown): AdminProviderConfiguration {
     || typeof value.secretConfigured !== "boolean" || typeof value.modelsSynced !== "boolean"
     || !Array.isArray(value.mappings) || value.mappings.length > 100
     || !value.mappings.every((mapping) => record(mapping) && typeof mapping.id === "string" && typeof mapping.name === "string" && typeof mapping.modelId === "string")) invalidResponse()
+  let annotationCapabilities
+  try { annotationCapabilities = validateAnnotationCapabilities(value.annotationCapabilities) } catch { invalidResponse() }
+  if (annotationCapabilities.some(item => item.configurationRevision !== value.revision || !(value.mappings as { id: string }[]).some(mapping => mapping.id === item.mappingId))) invalidResponse()
   return {
     revision: value.revision,
     settings: { baseUrl: value.settings.baseUrl, apiKey: "", apiMode: value.settings.apiMode as ProviderApiMode },
@@ -102,6 +106,7 @@ function readAdmin(value: unknown): AdminProviderConfiguration {
     models: readModels(value.models),
     mappings: value.mappings.map(({ id, name, modelId }) => ({ id, name, modelId })),
     modelsSynced: value.modelsSynced,
+    annotationCapabilities,
   }
 }
 
@@ -111,6 +116,14 @@ export async function readAdminProviderConfiguration(signal?: AbortSignal): Prom
 
 export async function saveAdminProviderConfiguration(input: ProviderConfigurationInput): Promise<AdminProviderConfiguration> {
   return readAdmin(await request("/api/admin/provider", { method: "PUT", body: JSON.stringify(input) }))
+}
+
+export async function recordProviderAnnotationCapability(input: RecordAnnotationCapabilityInput): Promise<AdminProviderConfiguration> {
+  return readAdmin(await request("/api/admin/provider/annotation-capabilities", { method: "POST", body: JSON.stringify(input) }))
+}
+
+export async function disableProviderAnnotationCapability(input: DisableAnnotationCapabilityInput): Promise<AdminProviderConfiguration> {
+  return readAdmin(await request("/api/admin/provider/annotation-capabilities", { method: "DELETE", body: JSON.stringify(input) }))
 }
 
 export async function syncProviderModels(input: { revision: number; baseUrl: string; apiKey: string; apiMode: ProviderApiMode }, signal?: AbortSignal): Promise<ProviderModel[]> {
@@ -127,6 +140,7 @@ export async function getPublicModelCatalog(signal?: AbortSignal): Promise<Publi
   const ids = new Set<string>()
   const names = new Set<string>()
   const ratios = new Set<string>(ALL_ASPECT_RATIO_VALUES)
+  const annotations: PublicAnnotationCapability[] = []
   for (const mapping of value.mappings) {
     if (!record(mapping) || typeof mapping.id !== "string" || !mapping.id.trim() || mapping.id !== mapping.id.trim() || mapping.id.length > 128
       || typeof mapping.name !== "string" || !mapping.name.trim() || mapping.name !== mapping.name.trim() || mapping.name.length > 40
@@ -138,7 +152,8 @@ export async function getPublicModelCatalog(signal?: AbortSignal): Promise<Publi
     if (ids.has(mapping.id) || names.has(name)) invalidResponse()
     ids.add(mapping.id)
     names.add(name)
+    try { annotations.push(validatePublicAnnotationCapability(mapping.annotation)) } catch { invalidResponse() }
   }
   return { revision: value.revision, configured: value.configured, apiMode: value.apiMode as ProviderApiMode,
-    mappings: value.mappings.map(({ id, name, aspectRatios }) => ({ id, name, aspectRatios: [...aspectRatios] })) }
+    mappings: value.mappings.map(({ id, name, aspectRatios }, index) => ({ id, name, aspectRatios: [...aspectRatios], annotation: annotations[index] })) }
 }

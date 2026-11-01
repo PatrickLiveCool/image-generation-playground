@@ -1,13 +1,16 @@
 "use client"
 
 import dynamic from "next/dynamic"
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react"
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ClipboardEvent, DragEvent, ReactElement } from "react"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { resolveModelMapping } from "@/lib/model-mappings"
 import { prepareReference } from "@/lib/prepare-reference"
 import { isDocumentFile, validateDocumentFile } from "@/lib/document-context"
 import type { Creation, CreationDraft } from "@/lib/creation-types"
+import { createEmptyAnnotationSnapshot, type AnnotationDraft } from "@/lib/image-annotations"
+import { buildCreationRequest } from "@/lib/creation-request"
+import { privateRequest } from "@/lib/private-workspace-client"
 import { useModelCatalog } from "./hooks/use-model-catalog"
 import { useCreativeWorkspace, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
 import { useCreationGeneration } from "./hooks/use-creation-generation"
@@ -18,6 +21,8 @@ import { OutputSection } from "./output-section"
 import { CreationList } from "./creation-list"
 import { CreationHistory } from "./creation-history"
 import { ToastNotification } from "./toast-notification"
+import { AnnotationCanvas, AnnotationList, AnnotationTools, addCenterAnnotation, useAnnotationEditor } from "./annotation-editor"
+import { useAnnotationMetadata } from "./hooks/use-annotation-metadata"
 
 const Dithering = dynamic(() => import("@paper-design/shaders-react").then(mod => ({ default: mod.Dithering })), { ssr: false })
 const MemoizedDithering = memo(Dithering)
@@ -39,6 +44,10 @@ function useFilePreview(file: File | null) {
 }
 
 export function ImageCombiner({ accountId }: { accountId: string }): ReactElement {
+  return <AccountImageCombiner key={accountId} accountId={accountId} />
+}
+
+function AccountImageCombiner({ accountId }: { accountId: string }): ReactElement {
   const api = useModelCatalog()
   const workspace = useCreativeWorkspace(accountId)
   const [showHelp, setShowHelp] = useState(false)
@@ -78,8 +87,10 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
     patchDraft(creationId, slot === 1 ? { image1: null, image1Url: "" } : { image2: null, image2Url: "" })
   }, [patchDraft, refreshUploads])
   const clearDocument = useCallback((creationId: string) => {
-    patchDraft(creationId, { documentName: "", documentText: "", documentFile: null })
-  }, [patchDraft])
+    uploadTokens.current.delete(`${creationId}:document`)
+    refreshUploads()
+    patchDraft(creationId, { documentName: "", documentText: "", documentFile: null, documentImageInspection: "unknown" })
+  }, [patchDraft, refreshUploads])
   const upload = useCallback(async (creationId: string, file: File, slot: 1 | 2) => {
     const creation = getCreation(creationId)
     if (!creation || creation.versions.some(version => version.status === "loading")) return
@@ -109,15 +120,23 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
   const uploadDocument = useCallback(async (creationId: string, file: File) => {
     const creation = getCreation(creationId)
     if (!creation || creation.versions.some(version => version.status === "loading")) return
+    const key = `${creationId}:document`, token = Symbol(key)
     try {
       validateDocumentFile(file)
       if (!mounted.current) return
-      patchDraft(creationId, { documentName: file.name, documentText: "", documentFile: file })
+      patchDraft(creationId, { documentName: file.name, documentText: "", documentFile: file, documentImageInspection: "unknown" })
+      uploadTokens.current.set(key, token); refreshUploads()
+      const body = new FormData(); body.set("document", file)
+      const value = await privateRequest("/api/documents/preview", { method: "POST", body }) as { document?: { text?: unknown; imageInspection?: unknown } }
+      if (!mounted.current || uploadTokens.current.get(key) !== token || getCreation(creationId)?.draft.documentFile !== file) return
+      const preview = value.document
+      if (!preview || typeof preview.text !== "string" || !["none", "present", "unknown"].includes(String(preview.imageInspection))) throw new Error("文档检查未确认，原文件已保留；区域批注可改用纯 TXT。")
+      patchDraft(creationId, { documentText: preview.text, documentImageInspection: preview.imageInspection as "none" | "present" | "unknown" })
       showToast(`已载入文档：${file.name}，提交时会保存到私有 COS`)
     } catch (error) {
-      showToast(error instanceof Error ? error.message : "读取文档失败。", "error")
-    }
-  }, [getCreation, patchDraft, showToast])
+      if (mounted.current && (!uploadTokens.current.has(key) || uploadTokens.current.get(key) === token)) showToast(error instanceof Error ? error.message : "文档检查失败，原文件已保留。", "error")
+    } finally { if (uploadTokens.current.get(key) === token) uploadTokens.current.delete(key); refreshUploads() }
+  }, [getCreation, patchDraft, showToast, refreshUploads])
 
   const submit = useCallback((creationId: string) => {
     if ([...uploadTokens.current.keys()].some(key => key.startsWith(`${creationId}:`))) return
@@ -188,9 +207,27 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   const image2Preview = draft.useUrls ? draft.image2Url : file2Preview
   const promptRef = useRef<HTMLTextAreaElement>(null)
   const [imageLoaded, setImageLoaded] = useState(false)
+  const metadata = useAnnotationMetadata(base?.imageUrl, base?.id)
+  const [annotationTool, setAnnotationTool] = useState<"rectangle" | "lasso" | "brush" | null>(null)
+  const annotationDraft = useMemo(() => {
+    if (!base) return undefined
+    if (draft.annotationDrafts?.[base.id]) return draft.annotationDrafts[base.id]
+    if (!metadata.metadata || metadata.metadata.pages !== 1) return undefined
+    return { snapshot: createEmptyAnnotationSnapshot(base.id, { ...metadata.metadata, pages: 1 }), revision: 0, nextNumber: 1 }
+  }, [base?.id, draft.annotationDrafts, metadata.metadata])
+  const saveAnnotations = (value: AnnotationDraft) => patch({ annotationDrafts: { ...workspace.getCreation(creation.id)?.draft.annotationDrafts, [value.snapshot.baseVersionId]: value } })
+  const annotationEditor = useAnnotationEditor(annotationDraft, saveAnnotations, `${creation.id}:${base?.id ?? ""}`)
+  const hasAnnotations = Boolean(annotationDraft?.snapshot.marks.length)
+  const annotationDisabledReason = !base ? undefined : pending ? "当前任务正在处理，暂不能绘制或切换基础版本。" : !imageLoaded ? "基准图尚未加载完成，暂不能绘制。" : metadata.error || (!metadata.metadata ? "正在读取原图尺寸与方向…" : annotationDraft && (["assetId", "width", "height", "orientation", "pages"] as const).some(key => annotationDraft.snapshot.image[key] !== metadata.metadata![key]) ? "批注与原图信息不匹配，原草稿已保留。" : undefined)
+  useEffect(() => { setAnnotationTool(null) }, [base?.id])
   const isMobile = useIsMobile()
   const referenceCount = draft.useUrls ? Number(Boolean(draft.image1Url.trim())) + Number(Boolean(draft.image2Url.trim())) : Number(Boolean(draft.image1)) + Number(Boolean(draft.image2))
-  const canGenerate = api.isConfigured && Boolean(selectedMapping) && Boolean(draft.prompt.trim()) && !pending && !uploading && (!base || referenceCount <= 1)
+  let annotationSubmissionReason: string | undefined
+  if (hasAnnotations) {
+    if (annotationDisabledReason) annotationSubmissionReason = annotationDisabledReason
+    else { try { buildCreationRequest({ creation, catalog: api.catalog }) } catch (error) { annotationSubmissionReason = error instanceof Error ? error.message : "请检查批注。" } }
+  }
+  const canGenerate = api.isConfigured && Boolean(selectedMapping) && Boolean(draft.prompt.trim() || hasAnnotations) && !pending && !uploading && (!base || referenceCount <= 1) && !annotationSubmissionReason
   const currentMode = base || referenceCount ? "image-editing" : "text-to-image"
   const generatedImage = base?.imageUrl ? { url: base.imageUrl, prompt: base.prompt } : null
   const actions = useImageActions({ isMobile: Boolean(isMobile), currentMode, onToast })
@@ -219,7 +256,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
       const target = document.activeElement
       const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
       if (event.key === "Escape" && actions.showFullscreen) actions.closeFullscreen()
-      if (typing) return
+      if (typing || (target instanceof Element && target.closest("[data-annotation-canvas]"))) return
       if (actions.showFullscreen && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
         event.preventDefault(); event.stopImmediatePropagation()
         navigate(event.key === "ArrowLeft" ? "prev" : "next")
@@ -236,6 +273,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   const clearAll = () => {
     if (pending) return
     onClearImage(creation.id, 1); onClearImage(creation.id, 2); onClearDocument()
+    if (hasAnnotations) annotationEditor.change([])
     patch({ prompt: "" })
     promptRef.current?.focus()
   }
@@ -278,7 +316,8 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
           canGenerate={canGenerate} hasImages={Boolean(base || referenceCount)} onGenerate={() => onGenerate(creation.id)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
           onUrlChange={(url, slot) => { clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
           onKeyDown={event => { if ((event.shiftKey || event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
-          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理上传内容…" : base ? `修改 V${base.version ?? 1}` : "生成图片"} />
+          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理上传内容…" : base ? `修改 V${base.version ?? 1}` : "生成图片"}
+          hasAnnotations={hasAnnotations} annotationContent={<AnnotationList editor={annotationEditor} reason={annotationSubmissionReason} onSubmit={() => { if (canGenerate) onGenerate(creation.id) }} />} />
         {uploading && <p role="status" className="text-xs text-gray-400">正在处理上传内容，可切换创作；完成后会放回当前创作。</p>}
         <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} onCheckStatus={id => void onCheckStatus(creation.id, id)} onRepair={id => void onCheckStatus(creation.id, id, true)} onDownloadDocument={document => void actions.downloadDocument(document)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
       </div>
@@ -286,7 +325,9 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
         <OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}
           imageLoaded={imageLoaded} setImageLoaded={setImageLoaded} onCancelGeneration={id => onCancel(creation.id, id)} onDeleteGeneration={noop}
           onOpenFullscreen={() => generatedImage && actions.openFullscreen(generatedImage.url)} onCopy={() => void actions.copyImageToClipboard(generatedImage)} onDownload={() => void actions.downloadImage(generatedImage)}
-          onOpenInNewTab={() => actions.openImageInNewTab(generatedImage)} onImageReady={noop} onImageError={noop} />
+          onOpenInNewTab={() => actions.openImageInNewTab(generatedImage)} onImageReady={noop} onImageError={noop}
+          annotationTools={base && <AnnotationTools editor={annotationEditor} disabledReason={annotationDisabledReason} tool={annotationTool} setTool={setAnnotationTool} addCenter={() => { if (!annotationDisabledReason) addCenterAnnotation(annotationEditor) }} onRetryMetadata={metadata.error ? metadata.retry : undefined} />}
+          annotationOverlay={annotationDraft && <AnnotationCanvas editor={annotationEditor} tool={annotationTool} disabled={Boolean(annotationDisabledReason)} onSubmit={() => { if (canGenerate) onGenerate(creation.id) }} />} />
       </div>
       <Suspense fallback={null}>{actions.showFullscreen && actions.fullscreenImageUrl && <FullscreenViewer imageUrl={actions.fullscreenImageUrl} onClose={actions.closeFullscreen} onNavigate={navigate} canNavigate={!pending && fullscreenIsVersion && completed.length > 1} />}</Suspense>
     </div>

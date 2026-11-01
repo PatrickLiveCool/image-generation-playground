@@ -100,3 +100,59 @@ test("停发multipart和永不完成的cancel不能绕过上传时限", async ()
   await assert.rejects(readPrivateGenerationForm(request, 10), error => error instanceof AccountError && error.code === "REQUEST_BODY_TIMEOUT" && error.status === 408)
   assert.equal(cancelled, true)
 })
+
+function annotatedForm() {
+  const data = form(), parentVersionId = randomUUID()
+  const snapshot = { schema: 1, coordinateSpace: "encoded-pixels-v1", baseVersionId: parentVersionId,
+    image: { assetId: randomUUID(), width: 80, height: 60, orientation: 1, pages: 1 },
+    marks: [{ id: randomUUID(), number: 4, instruction: "将此区域改成蓝色", geometry: { type: "rectangle", x: 10, y: 12, width: 30, height: 20 } }],
+  }
+  data.set("parentVersionId", parentVersionId); data.set("mode", "image-editing"); data.set("prompt", "")
+  data.set("annotationSnapshot", JSON.stringify(snapshot))
+  return { data, snapshot }
+}
+
+test("批注允许空整体要求，编号与区域进入请求指纹且纯文字文档可组合", async () => {
+  const { data, snapshot } = annotatedForm()
+  const first = await parsePrivateGenerationForm(data)
+  assert.equal(first.command.prompt, "")
+  assert.deepEqual(first.command.annotationSnapshot, snapshot)
+  assert.match(first.effectivePrompt, /将此区域改成蓝色/)
+  assert.equal((await parsePrivateGenerationForm(data)).command.fingerprint, first.command.fingerprint)
+  snapshot.marks[0].geometry.x += 1
+  data.set("annotationSnapshot", JSON.stringify(snapshot))
+  assert.notEqual((await parsePrivateGenerationForm(data)).command.fingerprint, first.command.fingerprint)
+  data.set("document", new File(["保留其余画面"], "brief.txt", { type: "text/plain" }))
+  const withDocument = await parsePrivateGenerationForm(data)
+  assert.equal(withDocument.document?.imageInspection, "none")
+  assert.match(withDocument.effectivePrompt, /保留其余画面/)
+})
+
+test("批注拒绝额外参考图、错误基准、伪造字段、非法几何及超限组合", async () => {
+  for (const change of [
+    (data: FormData) => data.set("image1Url", "https://public.example/reference.png"),
+    (data: FormData) => data.set("image1", new File([png], "reference.png", { type: "image/png" })),
+    (data: FormData) => data.delete("parentVersionId"),
+    (data: FormData) => data.set("parentVersionId", randomUUID()),
+    (data: FormData) => data.set("annotationSnapshot", "null"),
+    (data: FormData) => data.set("prompt", "字".repeat(5000)),
+  ]) {
+    const { data } = annotatedForm(); change(data)
+    await assert.rejects(parsePrivateGenerationForm(data), invalid)
+  }
+  for (const change of [
+    (snapshot: ReturnType<typeof annotatedForm>["snapshot"]) => { snapshot.marks[0].instruction = "" },
+    (snapshot: ReturnType<typeof annotatedForm>["snapshot"]) => { snapshot.marks[0].geometry.width = 100 },
+    (snapshot: ReturnType<typeof annotatedForm>["snapshot"]) => { Object.assign(snapshot, { ownerId: randomUUID() }) },
+  ]) {
+    const { data, snapshot } = annotatedForm(); change(snapshot); data.set("annotationSnapshot", JSON.stringify(snapshot))
+    await assert.rejects(parsePrivateGenerationForm(data), invalid)
+  }
+})
+
+test("无批注请求继续使用原有字段顺序和指纹，不引入null字段破坏旧请求重试", async () => {
+  const { bytesHash } = await import("../lib/private-generation-input")
+  const parsed = await parsePrivateGenerationForm(form())
+  assert.equal(Object.hasOwn(parsed.command, "annotationSnapshot"), false)
+  assert.equal(parsed.command.fingerprint, bytesHash(JSON.stringify({ creationId, clientRequestId: requestId, fingerprint: "", parentVersionId: null, mappingId: "mapping", configRevision: 1, prompt: "把背景改成蓝色", aspectRatio: "square", quality: "auto", mode: "text-to-image", references: [], document: null })))
+})
