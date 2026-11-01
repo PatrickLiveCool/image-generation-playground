@@ -69,7 +69,11 @@ uid,gid,source,result=map(int,sys.argv[1:5])
 first=os.dup(source)
 second=os.dup(result) if result >= 0 else -1
 os.dup2(first,3,inheritable=True)
-if second >= 0: os.dup2(second,4,inheritable=True)
+# dup2(fd, fd) leaves FD_CLOEXEC unchanged when dup() already chose the slot.
+os.set_inheritable(3,True)
+if second >= 0:
+ os.dup2(second,4,inheritable=True)
+ os.set_inheritable(4,True)
 os.closerange(5,256)
 if second < 0:
  try: os.close(4)
