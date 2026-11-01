@@ -1,3 +1,4 @@
+import fcntl
 import hashlib
 import io
 import json
@@ -1212,6 +1213,64 @@ os.execve=checked_exec
         finally:
             os.close(archive)
             os.close(prepared)
+
+    def test_fixed_private_descriptors_survive_real_node_exec(self):
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'Node is required to verify the maintenance exec boundary')
+        probe = self.base / 'descriptor-probe.mjs'
+        probe.write_text('''import assert from 'node:assert/strict';
+import {fstatSync,readFileSync,writeSync} from 'node:fs';
+const command=process.argv[2];
+assert.equal(fstatSync(3).isFile(),true,'FD3 must remain the private file after exec');
+assert.equal(fstatSync(3).mode&0o777,0o600);
+if(command==='backup'){
+ assert.equal(fstatSync(3).size,0);
+ writeSync(3,'synthetic-backup');
+}else{
+ assert.equal(readFileSync(3,'utf8'),'synthetic-input');
+}
+if(command==='restore'){
+ assert.equal(fstatSync(4).isFile(),true,'FD4 must remain the private file after exec');
+ assert.equal(fstatSync(4).mode&0o777,0o600);
+ assert.equal(fstatSync(4).size,0);
+ writeSync(4,'synthetic-restored-secrets');
+}
+console.log(command);
+''')
+        # Keep the real execve; only privilege changes are suppressed in this
+        # unprivileged test child. High input FDs leave slots 3/4 free for dup().
+        prefix = '''import os
+os.setgroups=lambda groups: None
+os.setgid=lambda gid: None
+os.setuid=lambda uid: None
+'''
+        for command in ['bootstrap-admin', 'backup', 'restore']:
+            with self.subTest(command=command):
+                descriptors = []
+                source = self.base / ('exec-source-' + command)
+                destination = self.base / ('exec-output-' + command)
+                try:
+                    for path in [source, *([destination] if command == 'restore' else [])]:
+                        low = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                        try:
+                            if path == source and command != 'backup':
+                                os.write(low, b'synthetic-input')
+                                os.lseek(low, 0, os.SEEK_SET)
+                            descriptors.append(fcntl.fcntl(low, fcntl.F_DUPFD, 64))
+                        finally:
+                            os.close(low)
+                    result = subprocess.run([sys.executable, '-I', '-c', prefix + FD_LAUNCHER,
+                                             str(os.getuid()), str(os.getgid()), str(descriptors[0]),
+                                             str(descriptors[1] if command == 'restore' else -1), node, str(probe), command],
+                                            pass_fds=tuple(descriptors), capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, command + '\n')
+                    self.assertEqual(source.read_bytes(), b'synthetic-backup' if command == 'backup' else b'synthetic-input')
+                    if command == 'restore':
+                        self.assertEqual(destination.read_bytes(), b'synthetic-restored-secrets')
+                finally:
+                    for descriptor in descriptors:
+                        os.close(descriptor)
 
 
 class SystemStopTest(unittest.TestCase):
