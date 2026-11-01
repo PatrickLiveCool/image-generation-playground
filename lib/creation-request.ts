@@ -73,7 +73,7 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
   const mode = base || references.length ? "image-editing" : "text-to-image"
   const formData = new FormData()
   for (const [key, value] of Object.entries({
-    mappingId: mapping.id, configRevision: String(catalog.revision), prompt: effectivePrompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
+    mappingId: mapping.id, configRevision: String(catalog.revision), prompt: draft.prompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
     mode, creationId: creation.id, clientRequestId: generationId,
   })) formData.set(key, value)
   if (base?.imageUrl) {
@@ -84,10 +84,15 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
     else formData.set(`image${index + 1}`, reference)
   })
   if (draft.documentFile) formData.set("document", draft.documentFile, draft.documentFile.name)
+  else if (documentText.trim()) {
+    formData.set("documentName", documentName || "恢复文档.txt")
+    formData.set("documentText", documentText)
+  }
 
   // Only a stable mapping ID is submitted. The server resolves its configuration and original base asset.
   const generation: Generation = {
     id: generationId, creationId: creation.id, version, parentVersionId: base?.id ?? null,
+    runStatus: "preparing", submittedDraftRevision: creation.draftRevision, quality: draft.quality,
     model: mapping.id, modelLabel: mapping.name, status: "loading", progress: 0, phase: "sending",
     imageUrl: null, prompt: draft.prompt, timestamp: now, aspectRatio: draft.aspectRatio, mode,
   }

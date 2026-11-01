@@ -2,102 +2,130 @@
 
 import { useCallback, useEffect, useRef } from "react"
 import type { PublicModelCatalog } from "@/lib/provider-configuration-types"
-import { ACCOUNT_SESSION_RECHECK_EVENT } from "@/lib/account-client"
 import { buildCreationRequest } from "@/lib/creation-request"
+import { PrivateWorkspaceError, requestPrivateRun } from "@/lib/private-workspace-client"
+import type { PrivateRun } from "@/lib/private-workspace-types"
 import type { CreativeWorkspaceController } from "./use-creative-workspace"
 
-interface RunningRequest {
-  id: string
-  controller: AbortController
-  timer: ReturnType<typeof setInterval>
+interface RunningRequest { id: string; controller: AbortController; timer?: ReturnType<typeof setInterval> }
+const ongoing = (run: PrivateRun) => ["preparing", "generating", "saving"].includes(run.status)
+function waitForPoll(signal: AbortSignal) {
+  return new Promise<void>(resolve => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve() }
+    const timer = setTimeout(done, 2000)
+    signal.addEventListener("abort", done, { once: true })
+    if (signal.aborted) done()
+  })
 }
 
-/** Owned by the workspace, so changing the visible creation cannot cancel or redirect a request. */
-export function useCreationGeneration(
-  workspace: CreativeWorkspaceController,
-  catalog: PublicModelCatalog,
-  onToast: (message: string, type?: "success" | "error") => void,
-) {
+/** Each request captures a creation and draft revision before any asynchronous work. */
+export function useCreationGeneration(workspace: CreativeWorkspaceController, catalog: PublicModelCatalog, onToast: (message: string, type?: "success" | "error") => void) {
   const requests = useRef(new Map<string, RunningRequest>())
-  const { getCreation, startGeneration, updateGeneration, completeGeneration, failGeneration } = workspace
-
+  const observed = useRef(new Set<string>())
+  const mounted = useRef(true)
+  const { getCreation, startGeneration, updateGeneration, failGeneration, ensureRemoteCreation, applyRun, markUnknown } = workspace
   useEffect(() => {
+    mounted.current = true
     const running = requests.current
-    const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!running.size) return
-      event.preventDefault()
-      event.returnValue = ""
-    }
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (running.size) { event.preventDefault(); event.returnValue = "" } }
     window.addEventListener("beforeunload", beforeUnload)
     return () => {
+      mounted.current = false
       window.removeEventListener("beforeunload", beforeUnload)
-      for (const request of running.values()) {
-        clearInterval(request.timer)
-        request.controller.abort()
-      }
+      for (const request of running.values()) { clearInterval(request.timer); request.controller.abort() }
       running.clear()
     }
   }, [])
+
+  const poll = useCallback(async (creationId: string, id: string, controller: AbortController, initial?: PrivateRun) => {
+    let run = initial
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (controller.signal.aborted || !mounted.current) return
+      if (run) {
+        applyRun(run)
+        if (!ongoing(run)) return
+        await waitForPoll(controller.signal)
+      }
+      if (controller.signal.aborted || !mounted.current) return
+      run = await requestPrivateRun(id, { signal: controller.signal })
+      if (run.creationId !== creationId) throw new PrivateWorkspaceError("任务归属未能确认，请刷新创作。")
+    }
+    if (!controller.signal.aborted && mounted.current && run) {
+      applyRun(run)
+      if (ongoing(run)) markUnknown(creationId, id, "任务仍在处理，已停止自动查询；请稍后查看状态，勿重复提交。")
+    }
+  }, [applyRun, markUnknown])
+
+  const checkStatus = useCallback(async (creationId: string, id: string, repair = false) => {
+    if (requests.current.has(creationId)) return
+    const controller = new AbortController()
+    requests.current.set(creationId, { id, controller })
+    observed.current.add(id)
+    try {
+      const run = await requestPrivateRun(id, { signal: controller.signal, repair })
+      if (run.creationId !== creationId) throw new PrivateWorkspaceError("任务归属未能确认，请刷新创作。")
+      await poll(creationId, id, controller, run)
+    } catch (error) {
+      if (controller.signal.aborted || !mounted.current) return
+      const message = error instanceof PrivateWorkspaceError && error.status === 404
+        ? "未找到本次任务。输入已保留，请刷新创作核对；需要重新生成时请明确提交。"
+        : error instanceof Error ? error.message : "任务状态尚未确认，请稍后查看状态。"
+      markUnknown(creationId, id, message)
+      onToast(message, "error")
+    } finally { if (requests.current.get(creationId)?.id === id) requests.current.delete(creationId) }
+  }, [markUnknown, onToast, poll])
+
+  useEffect(() => {
+    for (const creation of workspace.creations) {
+      const pending = creation.versions.find(run => run.status === "loading" && run.runStatus)
+      if (pending && !observed.current.has(pending.id) && !requests.current.has(creation.id)) void checkStatus(creation.id, pending.id)
+    }
+  }, [workspace.creations, checkStatus])
 
   const generate = useCallback(async (creationId: string) => {
     if (requests.current.has(creationId)) return
     const creation = getCreation(creationId)
     if (!creation) return
-
     let prepared: ReturnType<typeof buildCreationRequest>
-    try {
-      prepared = buildCreationRequest({ creation, catalog })
-    } catch (error) {
-      onToast(error instanceof Error ? error.message : "请检查本轮输入。", "error")
-      return
-    }
+    try { prepared = buildCreationRequest({ creation, catalog }) }
+    catch (error) { onToast(error instanceof Error ? error.message : "请检查本轮输入。", "error"); return }
     const { formData, generation } = prepared
-    if (!startGeneration(creationId, generation)) return
     const controller = new AbortController()
-    const startedAt = Date.now()
-    // This is a waiting indicator, not progress reported by the provider.
-    const timer = setInterval(() => {
-      updateGeneration(creationId, generation.id, {
-        progress: Math.min(92, 5 + 87 * (1 - Math.exp(-(Date.now() - startedAt) / 70_000))),
-        phase: "generating",
-      })
-    }, 1000)
-    requests.current.set(creationId, { id: generation.id, controller, timer })
-
+    const request: RunningRequest = { id: generation.id, controller }
+    requests.current.set(creationId, request)
+    observed.current.add(generation.id)
+    let submitted = false
     try {
-      const response = await fetch("/api/generate-image", { method: "POST", body: formData, signal: controller.signal })
-      const result = await response.json().catch(() => null)
-      if (!response.ok) {
-        if (response.status === 401 || result?.error?.code === "PASSWORD_CHANGE_REQUIRED") {
-          window.dispatchEvent(new Event(ACCOUNT_SESSION_RECHECK_EVENT))
-        }
-        throw new Error(typeof result?.error === "string" ? result.error
-          : typeof result?.error?.message === "string" ? result.error.message : "生成未完成，请稍后重试。")
-      }
-      if (typeof result?.url !== "string" || !result.url) throw new Error("接口没有返回图片，请检查中转的图片接口设置。")
-      if (controller.signal.aborted) return
-      // Completion is independent of the visible <img> decoding the result.
-      completeGeneration(creationId, generation.id, { imageUrl: result.url })
+      await ensureRemoteCreation(creationId, generation.prompt)
+      if (controller.signal.aborted || !mounted.current || !startGeneration(creationId, generation)) return
+      submitted = true
+      const startedAt = Date.now()
+      request.timer = setInterval(() => updateGeneration(creationId, generation.id, {
+        progress: Math.min(92, 5 + 87 * (1 - Math.exp(-(Date.now() - startedAt) / 70_000))), phase: "generating",
+      }), 1000)
+      const run = await requestPrivateRun(generation.id, { formData, signal: controller.signal })
+      if (run.creationId !== creationId) throw new PrivateWorkspaceError("任务归属未能确认，请刷新创作。")
+      await poll(creationId, generation.id, controller, run)
     } catch (error) {
-      if (controller.signal.aborted) return
-      const message = error instanceof Error && /[\u3400-\u9fff]/.test(error.message)
-        ? error.message : "连接中断，生成结果尚未确认。原图和输入已保留，请确认后重试。"
-      failGeneration(creationId, generation.id, message)
+      if (controller.signal.aborted || !mounted.current) return
+      const message = error instanceof Error ? error.message : "连接中断，生成结果尚未确认。请查看状态，勿重复提交。"
+      if (submitted) {
+        if (error instanceof PrivateWorkspaceError && error.status >= 400 && error.status < 500) failGeneration(creationId, generation.id, message)
+        else markUnknown(creationId, generation.id, message)
+      }
       onToast(message, "error")
     } finally {
-      clearInterval(timer)
+      clearInterval(request.timer)
       if (requests.current.get(creationId)?.id === generation.id) requests.current.delete(creationId)
     }
-  }, [catalog, getCreation, startGeneration, updateGeneration, completeGeneration, failGeneration, onToast])
+  }, [catalog, getCreation, ensureRemoteCreation, startGeneration, updateGeneration, failGeneration, markUnknown, onToast, poll])
 
-  const cancel = useCallback((creationId: string, generationId: string) => {
+  const cancel = useCallback((creationId: string, id: string) => {
     const request = requests.current.get(creationId)
-    if (!request || request.id !== generationId) return
-    request.controller.abort()
-    clearInterval(request.timer)
-    requests.current.delete(creationId)
-    failGeneration(creationId, generationId, "已停止等待，原图和输入已保留；中转可能仍在处理本次请求。")
-  }, [failGeneration])
-
-  return { generate, cancel }
+    if (request?.id === id) {
+      request.controller.abort(); clearInterval(request.timer); requests.current.delete(creationId)
+    }
+    markUnknown(creationId, id, "已停止等待，任务可能仍在处理。输入已保留，请查看状态；不会自动重新生成。")
+  }, [markUnknown])
+  return { generate, cancel, checkStatus }
 }

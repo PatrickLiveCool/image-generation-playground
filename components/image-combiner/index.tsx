@@ -125,7 +125,7 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
   }, [generation.generate])
   const newCreation = () => {
     const draft = workspace.activeCreation?.draft
-    workspace.createCreation(draft ? { selectedMappingId: draft.selectedMappingId, aspectRatio: draft.aspectRatio, quality: draft.quality } : {})
+    void workspace.createCreation(draft ? { selectedMappingId: draft.selectedMappingId, aspectRatio: draft.aspectRatio, quality: draft.quality } : {})
   }
   const activeCreationId = workspace.activeCreation?.id
 
@@ -136,13 +136,13 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
       <main className="relative z-10 flex min-h-0 w-full flex-1 flex-col p-2 md:p-4 lg:p-6">
         <header className="mb-3 flex shrink-0 items-center justify-between gap-3">
           <div><h1 className="text-lg font-semibold md:text-2xl">图像生成实验室</h1><p className="mt-1 text-xs text-gray-400">{api.isConfigured ? "选择模型，持续创作" : "请联系管理员配置可用模型"}</p></div>
-          <button type="button" onClick={() => void api.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10">刷新模型</button>
+          <div className="flex gap-2"><button type="button" disabled={workspace.remoteBusy} onClick={() => void workspace.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-50">刷新创作</button><button type="button" onClick={() => void api.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10">刷新模型</button></div>
         </header>
         {(api.error || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.error}</div>}
         {workspace.ready && workspace.activeCreation ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-white/10 bg-black/75 p-2 lg:flex-row lg:overflow-hidden">
             <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
-            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
+            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} onCheckStatus={generation.checkStatus} />
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
         <footer className="flex shrink-0 items-center justify-center gap-3 pt-3 text-center text-xs text-gray-400">
@@ -167,9 +167,10 @@ interface EditorProps {
   uploading: boolean
   onGenerate: (id: string) => void
   onCancel: (id: string, generationId: string) => void
+  onCheckStatus: (id: string, generationId: string, repair?: boolean) => Promise<void>
 }
 
-function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel }: EditorProps) {
+function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel, onCheckStatus }: EditorProps) {
   const draft = creation.draft
   const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
   const pending = creation.versions.find(version => version.status === "loading")
@@ -266,6 +267,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   return (
     <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
       <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-3 lg:overflow-y-auto lg:pr-2">
+        {creation.creationUnknown && <p role="alert" className="text-xs text-amber-300">创作是否建立尚未确认，请先刷新创作核对，输入已保留。</p>}
         {api.ready && !api.error && draft.selectedMappingId && !selectedMapping && <p role="alert" className="mb-2 text-xs text-amber-300">之前选择的模型已被移除，请重新选择模型。</p>}
         <InputSection mappings={api.mappings} apiMode={api.apiMode} apiConfigured={api.isConfigured}
           prompt={draft.prompt} setPrompt={prompt => patch({ prompt })} aspectRatio={draft.aspectRatio} setAspectRatio={aspectRatio => patch({ aspectRatio })} availableAspectRatios={availableAspectRatios}
@@ -278,7 +280,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
           onKeyDown={event => { if ((event.shiftKey || event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
           onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理上传内容…" : base ? `修改 V${base.version ?? 1}` : "生成图片"} />
         {uploading && <p role="status" className="text-xs text-gray-400">正在处理上传内容，可切换创作；完成后会放回当前创作。</p>}
-        <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
+        <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} onCheckStatus={id => void onCheckStatus(creation.id, id)} onRepair={id => void onCheckStatus(creation.id, id, true)} onDownloadDocument={document => void actions.downloadDocument(document)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
       </div>
       <div className="order-2 h-[420px] min-w-0 lg:order-none lg:h-auto lg:min-h-0">
         <OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}

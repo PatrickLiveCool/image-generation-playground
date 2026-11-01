@@ -16,7 +16,6 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
           <DialogDescription className="text-gray-400">使用管理员配置的模型，在同一项创作中持续修改并保留版本。</DialogDescription>
         </DialogHeader>
         <div className="space-y-6 text-sm text-gray-300 max-h-[60vh] overflow-y-auto pr-2">
-          <p role="status" className="leading-relaxed text-amber-300">模型设置已可使用；账号私有生成链路仍在接入，本阶段暂不能生成或修改图片。以下介绍接通后的创作流程。</p>
           <div>
             <h3 className="text-lg font-semibold text-white mb-2">1. 配置你的 API</h3>
             <ul className="list-disc list-inside space-y-2 ml-2">
@@ -57,7 +56,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
             <ul className="list-disc list-inside space-y-2 ml-2">
               <li>在“我的创作”中新建、切换或重命名创作。每项创作独立保存草稿、参考图和版本历史。</li>
               <li>一项创作生成期间，可以切换到其他创作继续工作；正在生成的创作暂时不能修改输入或切换基准版本。</li>
-              <li>生成期间请保持网页打开。刷新或关闭后，未完成请求不会自动恢复；重新打开后可检查状态并手动重试。</li>
+              <li>生成期间请保持网页打开。刷新或连接中断后，先“查看状态”；若图片已产生但保存未确认，可“补记保存”。这些操作不会重新调用模型。</li>
               <li>失败或取消会保留已有图片和本轮草稿。取消仅停止本页等待，不保证中转停止任务或计费。</li>
               <li>生成完成后可下载、复制或全屏查看。清空输入只清除本轮草稿和补充参考图，保留已有版本。</li>
             </ul>
@@ -66,8 +65,8 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
           <div>
             <h3 className="text-lg font-semibold text-white mb-2">数据保存</h3>
             <ul className="list-disc list-inside space-y-2 ml-2">
-              <li>创作信息、草稿、参考图文件和历史引用保存在本浏览器的 IndexedDB 中，不含 API Token；更换浏览器、设备或域名不会自动同步。</li>
-              <li>清除浏览器数据会清除本地创作记录，不会删除对象存储中的文件。</li>
+              <li>已提交的创作、版本关系和生成参数按账号保存，换设备登录同一账号可以恢复。未提交草稿和参考文件仅在本设备按账号隔离保存。</li>
+              <li>清除浏览器数据会清除本设备草稿，不会删除账号已保存的创作和图片。</li>
               <li>图片仅所属账号登录后可访问；分享图片链接不会授予其他账号访问权限。</li>
               <li>已提交的参考图、各轮产出和任务清单保存在私有对象存储中，应用服务器不保存图片文件。清单包含原始提示词及版本之间的来源关系，不含 API Token。</li>
               <li>模型调用使用管理员保存的共享配置，费用和可用能力以中转服务为准。</li>

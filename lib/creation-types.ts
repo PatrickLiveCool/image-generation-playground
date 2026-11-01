@@ -28,6 +28,9 @@ export interface Creation {
   unread: boolean
   draftRevision: number
   pendingDraftRevision: number | null
+  remoteRevision?: number
+  localOnly?: boolean
+  creationUnknown?: boolean
 }
 
 export interface CreativeWorkspace {

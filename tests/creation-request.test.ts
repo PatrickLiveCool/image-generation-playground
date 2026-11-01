@@ -67,17 +67,23 @@ test("first request submits only the stable alias and snapshots the original pro
   for (const secret of ["test-token", "relay.example", "original-capability"]) assert.equal(JSON.stringify(generation).includes(secret), false)
 })
 
-test("a text document is sent as bounded prompt context while the visible generation prompt stays clean", () => {
+test("restored document text is sent separately so the server composes the prompt once", () => {
   const current = creation({ documentName: "poster-brief.md", documentText: "春季市集海报，主色为绿色。" })
   const { formData, generation } = build(current)
-  assert.equal(formData.get("prompt"), "  只把标题改为秋日山行\n其余保持不变。  \n\n【文档上下文：poster-brief.md】\n春季市集海报，主色为绿色。\n【文档上下文结束】")
+  assert.equal(formData.get("prompt"), current.draft.prompt)
+  assert.equal(formData.get("documentName"), "poster-brief.md")
+  assert.equal(formData.get("documentText"), "春季市集海报，主色为绿色。")
+  assert.equal(formData.has("document"), false)
   assert.equal(generation.prompt, current.draft.prompt)
 })
 
 test("a PDF or Word attachment is captured in the multipart request for server parsing and COS archiving", () => {
   const document = new File(["PK"], "poster-brief.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" })
-  const { formData, generation } = build(creation({ documentName: document.name, documentFile: document }))
+  const { formData, generation } = build(creation({ documentName: document.name, documentFile: document, documentText: "stale extracted text" }))
   assert.equal((formData.get("document") as File).name, document.name)
+  assert.equal(formData.has("documentText"), false)
+  assert.equal(formData.has("documentName"), false)
+  assert.equal(formData.get("prompt"), creation().draft.prompt)
   assert.equal(generation.prompt, creation().draft.prompt)
 })
 

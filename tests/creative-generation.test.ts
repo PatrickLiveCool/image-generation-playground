@@ -9,14 +9,17 @@ import ts from "typescript"
 
 const dir = mkdtempSync(path.join(tmpdir(), "creative-generation-contract-"))
 const compile = (source: string) => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText
-for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "document-parser", "stored-generation"]) {
+for (const name of ["provider-network", "relay-image", "document-context", "cos-assets", "document-parser", "stored-generation", "private-generation-input"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8")
   writeFileSync(path.join(dir, `${name}.js`), compile(source).replace('require("cos-nodejs-sdk-v5")', 'require("./cos-sdk-stub")'))
 }
 writeFileSync(path.join(dir, "cos-sdk-stub.js"), 'module.exports = class { constructor() { throw new Error("No live COS access in contract tests") } }')
 writeFileSync(path.join(dir, "next-stub.js"), 'exports.NextResponse = { json: (body, init) => Response.json(body, init) }')
 mkdirSync(path.join(dir, "auth"))
-writeFileSync(path.join(dir, "auth/guards.js"), 'exports.assertSameOrigin = () => {}; exports.requireAccount = async () => ({id:"synthetic-owner"}); exports.accountErrorResponse = () => Response.json({error:"请重新登录"},{status:401})')
+writeFileSync(path.join(dir, "auth/errors.js"), compile(readFileSync(new URL("../lib/auth/errors.ts", import.meta.url), "utf8")))
+writeFileSync(path.join(dir, "auth/guards.js"), 'exports.assertSameOrigin = () => {}; exports.accountIdentity = async () => ({user:{id:"synthetic-owner"},sessionId:"synthetic-session",sessionToken:"synthetic-session-token"})')
+writeFileSync(path.join(dir, "private-api.js"), 'exports.privateApiError = require("./auth/errors").accountErrorResponse; exports.privateJson = (body,status=200) => Response.json(body,{status,headers:{"Cache-Control":"private, no-store"}})')
+writeFileSync(path.join(dir, "private-generation.js"), 'exports.executePrivateGeneration = async () => { throw new Error("No live generation in route tests") }')
 const route = readFileSync(new URL("../lib/legacy-generation.ts", import.meta.url), "utf8")
 const protectedRoute = readFileSync(new URL("../app/api/generate-image/route.ts", import.meta.url), "utf8")
 writeFileSync(path.join(dir, "protected-route.js"), compile(protectedRoute).replaceAll('require("@/lib/', 'require("./'))
@@ -26,6 +29,8 @@ const assets = require(path.join(dir, "cos-assets.js"))
 const relay = require(path.join(dir, "relay-image.js"))
 const network = require(path.join(dir, "provider-network.js"))
 const auth = require(path.join(dir, "auth/guards.js"))
+const errors = require(path.join(dir, "auth/errors.js"))
+const privateGeneration = require(path.join(dir, "private-generation.js"))
 const { generateLegacyRequest: POST } = require(path.join(dir, "generate-route.js"))
 const { POST: protectedPOST } = require(path.join(dir, "protected-route.js"))
 after(() => rmSync(dir, { recursive: true, force: true }))
@@ -185,19 +190,42 @@ test("first creation version is valid without a parent while legacy HTTPS bases 
 })
 
 test("generation authorization fails before parsing input or contacting storage/provider", async context => {
-  context.mock.method(auth, "requireAccount", async () => { throw new Error("synthetic denied account") })
-  let stores = 0
-  context.mock.method(assets, "createCosStore", () => { stores++; throw new Error("must not access") })
+  context.mock.method(auth, "accountIdentity", async () => { throw new errors.AccountError("UNAUTHENTICATED", 401, "请重新登录") })
+  let calls = 0
+  context.mock.method(privateGeneration, "executePrivateGeneration", async () => { calls++; throw new Error("must not access") })
   const response = await protectedPOST(new Request("https://app.example/api/generate-image", { method: "POST", body: "invalid-form" }))
   assert.equal(response.status, 401)
-  assert.equal(stores, 0)
+  assert.equal(calls, 0)
 })
 
-test("account checkpoint refuses generation before any billable work while private asset output is unavailable", async context => {
-  let stores = 0
-  context.mock.method(assets, "createCosStore", () => { stores++; throw new Error("must not access") })
+test("private generation rejects invalid or legacy input before any billable work", async context => {
+  let calls = 0
+  context.mock.method(privateGeneration, "executePrivateGeneration", async () => { calls++; throw new Error("must not access") })
   const response = await protectedPOST(new Request("https://app.example/api/generate-image", { method: "POST", body: "invalid-form" }))
-  assert.equal(response.status, 503)
-  assert.equal((await response.json()).error.code, "PRIVATE_WORKSPACE_PENDING")
-  assert.equal(stores, 0)
+  assert.equal(response.status, 400)
+  assert.equal((await response.json()).error.code, "INVALID_INPUT")
+  assert.equal((await protectedPOST(request(form()))).status, 400)
+  assert.equal(calls, 0)
+})
+
+test("private route accepts only resolved commands and distinguishes saved success from accepted unknown", async context => {
+  let calls = 0
+  for (const status of ["complete", "unknown"]) {
+    context.mock.method(privateGeneration, "executePrivateGeneration", async (identity: any, input: any) => {
+      calls++
+      assert.equal(identity.user.id, "synthetic-owner")
+      assert.equal(input.command.mappingId, "selected-mapping")
+      assert.equal(input.command.parentVersionId, null)
+      assert.equal("modelId" in input.command, false)
+      assert.match(input.command.fingerprint, /^[0-9a-f]{64}$/)
+      return { id: clientVersionId, status }
+    })
+    const body = new FormData()
+    for (const [key,value] of Object.entries({ creationId, clientRequestId: clientVersionId, mappingId:"selected-mapping",configRevision:"1",prompt:"合成图片",aspectRatio:"square",quality:"auto",mode:"text-to-image" })) body.set(key,value)
+    const response = await protectedPOST(request(body))
+    assert.equal(response.status, status === "complete" ? 200 : 202)
+    assert.equal((await response.json()).run.status, status)
+    assert.match(response.headers.get("cache-control")!, /no-store/)
+  }
+  assert.equal(calls, 2)
 })
