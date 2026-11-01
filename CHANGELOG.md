@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.0...v0.4.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **release:** recover rejected account transitions safely ([f380b6b](https://github.com/PatrickLiveCool/image-generation-playground/commit/f380b6b77cb4787de89362a8c50b1956f9bb697a))
+* **release:** recover rejected account transitions safely ([534d589](https://github.com/PatrickLiveCool/image-generation-playground/commit/534d589a136cfd58af5862dfa57fe21796a83ef1))
+
+
+### Maintenance
+
+* **release:** prepare v0.3.1 account transition ([a3e25cd](https://github.com/PatrickLiveCool/image-generation-playground/commit/a3e25cd843e919544e16c6ed894149b60788ce5a))
+* **release:** retain reviewed v0.3.1 transition ancestry ([b84449c](https://github.com/PatrickLiveCool/image-generation-playground/commit/b84449c04a34d6139cd3e3f8a855cadea80c6db2))
+
 ## [0.4.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.3.0...v0.4.0) (2026-11-01)
 
 
