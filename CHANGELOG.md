@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.3.0...v0.4.0) (2026-11-01)
+
+
+### Features
+
+* **accounts:** add guarded login and administrator user management ([7201c56](https://github.com/PatrickLiveCool/image-generation-playground/commit/7201c56a8493dc52d916746a85d91da7bac21f17))
+* **accounts:** add guarded login and administrator user management ([2232e8f](https://github.com/PatrickLiveCool/image-generation-playground/commit/2232e8fb3ea7f932d4be616f57f972c7199c9599))
+* **annotations:** 实现图片区域批注与安全续改 ([6cc65c7](https://github.com/PatrickLiveCool/image-generation-playground/commit/6cc65c78cb67894e6bc552f85524177fda5a56fd))
+* **annotations:** 实现图片区域批注与安全续改 ([17e710b](https://github.com/PatrickLiveCool/image-generation-playground/commit/17e710b2a0e8dc8747aa8fe6fb6298a42e04fedf))
+* **models:** move shared model settings to administrator backend ([415fd48](https://github.com/PatrickLiveCool/image-generation-playground/commit/415fd48427a93fd057db8a71bd24a10e17e37c1a))
+* **models:** move shared model settings to administrator backend ([c4dcdcc](https://github.com/PatrickLiveCool/image-generation-playground/commit/c4dcdcc4207160db2e8d05525eb8ca7ade7a84a1))
+* **release:** add account-safe deployment and project recovery ([70cc662](https://github.com/PatrickLiveCool/image-generation-playground/commit/70cc662b13acc2e364e9e33ce937fd317ccbd8b7))
+* **release:** add account-safe deployment and project recovery ([1c39609](https://github.com/PatrickLiveCool/image-generation-playground/commit/1c39609b3a4b8820fb70c8b67eb24af0b5c67ff8))
+* **workspace:** persist account-private creations and recover saved versions ([3f3e07c](https://github.com/PatrickLiveCool/image-generation-playground/commit/3f3e07ceb533cc1f6c21353ff9e8287320369edb))
+* **workspace:** persist account-private creations and recover saved versions ([b6b32a5](https://github.com/PatrickLiveCool/image-generation-playground/commit/b6b32a57690cac1394485ebe70877fbcbbfa4f5c))
+
+
+### Documentation
+
+* **handoff:** 完成管理后台与批注目标交接 ([cb47c2b](https://github.com/PatrickLiveCool/image-generation-playground/commit/cb47c2b6e57d56d9b58f7453e95a70d9588f0c1a))
+* **plan:** define account and annotation delivery milestones ([f86f6b6](https://github.com/PatrickLiveCool/image-generation-playground/commit/f86f6b69fd42a96cee2b2cb588060d913204b9fc))
+
+
+### Maintenance
+
+* **dev:** enable BMad execution and stacked PR checks ([ac55477](https://github.com/PatrickLiveCool/image-generation-playground/commit/ac5547771bbcce2ce9dfe1a2c74b18f3b5cac13c))
+* **dev:** prepare staged account and annotation delivery ([#20](https://github.com/PatrickLiveCool/image-generation-playground/issues/20)) ([d9e1b5c](https://github.com/PatrickLiveCool/image-generation-playground/commit/d9e1b5ce6020468451993d05c0cc93eb524fb210))
+
 ## [0.3.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.6...v0.3.0) (2026-10-27)
 
 
