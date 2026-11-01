@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.1...v0.4.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* **release:** preserve private descriptors across maintenance exec ([a1a9d55](https://github.com/PatrickLiveCool/image-generation-playground/commit/a1a9d550f67566abb557f2fa5303ed57397a25ba))
+* **release:** preserve private descriptors across maintenance exec ([4da2174](https://github.com/PatrickLiveCool/image-generation-playground/commit/4da21746e29b0db0eee196bd1c9ae8c97334d4b6))
+
 ## [0.4.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.0...v0.4.1) (2026-11-01)
 
 
