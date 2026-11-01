@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 (2026-11-01)
+
+### Account transition release
+
+- Prepare the reviewed account and private-workspace implementation from PRs #21–24 as the required schema1/0004 transition before the annotation release.
+- Keep account isolation, administrator management, shared model configuration and private asset access; no annotation schema upgrade is included.
+
 ## [0.3.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.2.6...v0.3.0) (2026-10-27)
 
 
