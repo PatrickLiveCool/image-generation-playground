@@ -1,0 +1,12 @@
+{
+  "database": "qintopia_image",
+  "schema": "app",
+  "roles": {
+    "runtime": "qintopia_image_app",
+    "migration": "qintopia_image_migrator"
+  },
+  "targets": {
+    "local": { "host": "127.0.0.1", "port": 32768 },
+    "production": { "host": "10.80.0.15", "port": 5432 }
+  }
+}

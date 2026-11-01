@@ -10,6 +10,7 @@ import {
   type ProviderSettings,
 } from "@/lib/api-provider-types"
 
+import { accountStorageKey } from "@/lib/creative-workspace"
 import { normalizeModelMappings, validateModelMappings, restoreModelMappings } from "@/lib/model-mappings"
 
 const STORAGE_KEY = "image-playground-api-settings-v1"
@@ -41,27 +42,28 @@ function readSavedProvider(raw: string): SavedProvider | null {
   return { settings: normalized, models, mappings, modelsSynced }
 }
 
-function readStoredProvider(): SavedProvider | null {
+function readStoredProvider(storageKey: string): SavedProvider | null {
   const sources: Array<{ storage: Storage; migrated: boolean }> = []
   try { sources.push({ storage: window.localStorage, migrated: false }) } catch { /* Try the legacy session store below. */ }
   try { sources.push({ storage: window.sessionStorage, migrated: true }) } catch { /* Storage may be unavailable. */ }
 
   for (const { storage, migrated } of sources) {
     let raw: string | null = null
-    try { raw = storage.getItem(STORAGE_KEY) } catch { continue }
+    try { raw = storage.getItem(storageKey) } catch { continue }
     if (!raw) continue
     let saved: SavedProvider | null = null
     try { saved = readSavedProvider(raw) } catch { continue }
     if (!saved) continue
     if (migrated) {
-      try { window.localStorage.setItem(STORAGE_KEY, raw) } catch { /* The current tab can still use the restored value. */ }
+      try { window.localStorage.setItem(storageKey, raw) } catch { /* The current tab can still use the restored value. */ }
     }
     return saved
   }
   return null
 }
 
-export function useApiSettings() {
+export function useApiSettings(accountId: string) {
+  const storageKey = accountStorageKey(STORAGE_KEY, accountId)
   const [settings, setSettings] = useState<ProviderSettings>(EMPTY_PROVIDER_SETTINGS)
   const [models, setModels] = useState<ProviderModel[]>([])
   const [mappings, setMappings] = useState<ModelMapping[]>([])
@@ -71,7 +73,7 @@ export function useApiSettings() {
 
   useEffect(() => {
     try {
-      const saved = readStoredProvider()
+      const saved = readStoredProvider(storageKey)
       if (saved) {
         setSettings(saved.settings)
         setModels(saved.models)
@@ -83,7 +85,7 @@ export function useApiSettings() {
     } finally {
       setReady(true)
     }
-  }, [])
+  }, [storageKey])
 
   const saveSettings = useCallback((nextSettings: ProviderSettings, nextModels: ProviderModel[], nextMappings: ModelMapping[], nextModelsSynced: boolean) => {
     const normalized = normalizeProviderSettings(nextSettings)
@@ -97,12 +99,12 @@ export function useApiSettings() {
     setStorageError(null)
     try {
       const serialized = JSON.stringify({ settings: normalized, models: nextModels, mappings: normalizedMappings, modelsSynced: nextModelsSynced })
-      window.localStorage.setItem(STORAGE_KEY, serialized)
-      try { window.sessionStorage.removeItem(STORAGE_KEY) } catch { /* Ignore legacy cleanup failures. */ }
+      window.localStorage.setItem(storageKey, serialized)
+      try { window.sessionStorage.removeItem(storageKey) } catch { /* Ignore legacy cleanup failures. */ }
     } catch {
       setStorageError("浏览器不允许保存配置；本次页面可使用，重新打开后需重新填写。")
     }
-  }, [])
+  }, [storageKey])
 
   const clearSettings = useCallback(() => {
     setSettings(EMPTY_PROVIDER_SETTINGS)
@@ -111,12 +113,12 @@ export function useApiSettings() {
     setModelsSynced(false)
     setStorageError(null)
     try {
-      window.localStorage.removeItem(STORAGE_KEY)
-      try { window.sessionStorage.removeItem(STORAGE_KEY) } catch { /* Ignore legacy cleanup failures. */ }
+      window.localStorage.removeItem(storageKey)
+      try { window.sessionStorage.removeItem(storageKey) } catch { /* Ignore legacy cleanup failures. */ }
     } catch {
       setStorageError("浏览器未能清除保存的配置，请检查站点存储权限。")
     }
-  }, [])
+  }, [storageKey])
 
   return {
     settings,

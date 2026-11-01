@@ -4,14 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { Generation } from "../types"
 import type { CreationDraft, CreativeWorkspace } from "@/lib/creation-types"
 import {
-  WorkspaceConflictError, activateCreation, addCreation, completeCreationGeneration, emptyWorkspace,
+  WorkspaceConflictError, accountStorageKey, activateCreation, addCreation, completeCreationGeneration, emptyWorkspace,
   EMERGENCY_DRAFT_KEY, emergencyDraftEntry, recoverEmergencyDrafts, serializeEmergencyDrafts, type EmergencyDraftEntry,
-  failCreationGeneration, mergeLegacyHistory, migrateLegacyWorkspace, newCreation, patchCreationDraft, readWorkspace,
+  failCreationGeneration, newCreation, patchCreationDraft, readWorkspace,
   renameCreation as renameWorkspaceCreation, restoreWorkspace, selectCreationVersion,
   startCreationGeneration, updateCreationGeneration, workspaceSnapshot, writeWorkspace,
 } from "@/lib/creative-workspace"
 
-export function useCreativeWorkspace() {
+export function useCreativeWorkspace(accountId: string) {
+  const emergencyKey = accountStorageKey(EMERGENCY_DRAFT_KEY, accountId)
   const [workspace, setWorkspace] = useState<CreativeWorkspace>(emptyWorkspace)
   const [ready, setReady] = useState(false)
   const [storageError, setStorageError] = useState<string | null>(null)
@@ -28,12 +29,12 @@ export function useCreativeWorkspace() {
 
   const saveEmergencyDrafts = useCallback(() => {
     try {
-      if (!emergencyEntriesRef.current.size) sessionStorage.removeItem(EMERGENCY_DRAFT_KEY)
-      else sessionStorage.setItem(EMERGENCY_DRAFT_KEY, serializeEmergencyDrafts(persistedRevisionRef.current, pendingWriteIdRef.current, [...emergencyEntriesRef.current.values()], stateRef.current.activeCreationId))
+      if (!emergencyEntriesRef.current.size) sessionStorage.removeItem(emergencyKey)
+      else sessionStorage.setItem(emergencyKey, serializeEmergencyDrafts(persistedRevisionRef.current, pendingWriteIdRef.current, [...emergencyEntriesRef.current.values()], stateRef.current.activeCreationId))
     } catch {
       if (mountedRef.current) setStorageError("临时草稿无法保存，刷新前请稍候让创作记录完成保存。")
     }
-  }, [])
+  }, [emergencyKey])
 
   const flushSave = useCallback(async () => {
     if (!readyRef.current || !writableRef.current) return
@@ -48,7 +49,7 @@ export function useCreativeWorkspace() {
         pendingWriteIdRef.current = writeId
         saveEmergencyDrafts()
         try {
-          const revision = await writeWorkspace(snapshot, persistedRevisionRef.current, writeId)
+          const revision = await writeWorkspace(snapshot, persistedRevisionRef.current, writeId, accountId)
           persistedRevisionRef.current = revision
           // Keep any newer edits made while this transaction was running.
           stateRef.current = { ...stateRef.current, revision, lastWriteId: writeId }
@@ -74,7 +75,7 @@ export function useCreativeWorkspace() {
         }
       }
     } finally { savingRef.current = false }
-  }, [saveEmergencyDrafts])
+  }, [saveEmergencyDrafts, accountId])
 
   const scheduleSave = useCallback((immediate = false) => {
     clearTimeout(timerRef.current)
@@ -103,30 +104,28 @@ export function useCreativeWorkspace() {
     let cancelled = false
     const hydrate = async () => {
       try {
-        let raw = await readWorkspace()
+        let raw = await readWorkspace(accountId)
         let restored: CreativeWorkspace | undefined
         let referencesNeedReselect = false
         for (let attempt = 0; attempt < 3; attempt++) {
           if (cancelled) return
-          // Validate the canonical data before attempting to merge any legacy results.
+          // Only this account's data can enter the hydrated workspace.
           const canonical = raw === undefined ? undefined : restoreWorkspace(raw)
-          const recovery = canonical ? recoverEmergencyDrafts(canonical, sessionStorage.getItem(EMERGENCY_DRAFT_KEY)) : undefined
+          const recovery = canonical ? recoverEmergencyDrafts(canonical, sessionStorage.getItem(emergencyKey)) : undefined
           referencesNeedReselect = recovery?.referencesNeedReselect ?? false
-          restored = canonical
-            ? mergeLegacyHistory(recovery!.workspace, localStorage.getItem("img_gen_history"))
-            : migrateLegacyWorkspace(localStorage.getItem("img_gen_history"), sessionStorage.getItem("draft_form_state"))
+          restored = recovery?.workspace ?? emptyWorkspace()
           if (!restored.creations.length) restored = addCreation(restored, newCreation())
           if (restored === canonical) break
-          // Commit initial migration and late legacy imports before exposing them as ready.
+          // Commit this account's first empty workspace or recovered draft before exposing it.
           try {
             const writeId = crypto.randomUUID()
-            restored.revision = await writeWorkspace(restored, canonical?.revision ?? 0, writeId)
+            restored.revision = await writeWorkspace(restored, canonical?.revision ?? 0, writeId, accountId)
             restored.lastWriteId = writeId
             break
           } catch (error) {
             if (!(error instanceof WorkspaceConflictError) || attempt === 2) throw error
             // Another tab may have migrated or edited the workspace. Merge against its latest state.
-            raw = await readWorkspace()
+            raw = await readWorkspace(accountId)
           }
         }
         if (!restored) throw new Error("无法恢复创作记录。")
@@ -162,7 +161,7 @@ export function useCreativeWorkspace() {
       window.removeEventListener("pagehide", saveBeforeLeaving)
       document.removeEventListener("visibilitychange", onVisibility)
     }
-  }, [flushSave, saveEmergencyDrafts])
+  }, [flushSave, saveEmergencyDrafts, accountId, emergencyKey])
 
   const createCreation = useCallback((initialDraft: Partial<CreationDraft> = {}): string => {
     if (!readyRef.current) return ""
