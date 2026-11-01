@@ -3,13 +3,12 @@
 import dynamic from "next/dynamic"
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import type { ClipboardEvent, DragEvent, ReactElement } from "react"
-import { Settings2 } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { resolveModelMapping } from "@/lib/model-mappings"
 import { prepareReference } from "@/lib/prepare-reference"
 import { isDocumentFile, validateDocumentFile } from "@/lib/document-context"
 import type { Creation, CreationDraft } from "@/lib/creation-types"
-import { useApiSettings } from "./hooks/use-api-settings"
+import { useModelCatalog } from "./hooks/use-model-catalog"
 import { useCreativeWorkspace, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
 import { useCreationGeneration } from "./hooks/use-creation-generation"
 import { useAspectRatio } from "./hooks/use-aspect-ratio"
@@ -18,7 +17,6 @@ import { InputSection } from "./input-section"
 import { OutputSection } from "./output-section"
 import { CreationList } from "./creation-list"
 import { CreationHistory } from "./creation-history"
-import { ApiSettingsModal } from "./api-settings-modal"
 import { ToastNotification } from "./toast-notification"
 
 const Dithering = dynamic(() => import("@paper-design/shaders-react").then(mod => ({ default: mod.Dithering })), { ssr: false })
@@ -41,9 +39,8 @@ function useFilePreview(file: File | null) {
 }
 
 export function ImageCombiner({ accountId }: { accountId: string }): ReactElement {
-  const api = useApiSettings(accountId)
+  const api = useModelCatalog()
   const workspace = useCreativeWorkspace(accountId)
-  const [showApiSettings, setShowApiSettings] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
@@ -64,7 +61,7 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
-  const generation = useCreationGeneration(workspace, api.settings, api.mappings, showToast)
+  const generation = useCreationGeneration(workspace, api.catalog, showToast)
   const uploadTokens = useRef(new Map<string, symbol>())
   const [uploads, setUploads] = useState<string[]>([])
   const mounted = useRef(true)
@@ -138,14 +135,14 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
       {toast && <ToastNotification message={toast.message} type={toast.type} />}
       <main className="relative z-10 flex min-h-0 w-full flex-1 flex-col p-2 md:p-4 lg:p-6">
         <header className="mb-3 flex shrink-0 items-center justify-between gap-3">
-          <div><h1 className="text-lg font-semibold md:text-2xl">图像生成实验室</h1><p className="mt-1 text-xs text-gray-400">{api.isConfigured ? "你的 API · 持续创作" : "配置你的 API，开始创作"}</p></div>
-          <button type="button" onClick={() => setShowApiSettings(true)} className="flex shrink-0 items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10"><Settings2 className="size-4" />API 设置</button>
+          <div><h1 className="text-lg font-semibold md:text-2xl">图像生成实验室</h1><p className="mt-1 text-xs text-gray-400">{api.isConfigured ? "选择模型，持续创作" : "请联系管理员配置可用模型"}</p></div>
+          <button type="button" onClick={() => void api.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10">刷新模型</button>
         </header>
-        {(api.storageError || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.storageError}</div>}
+        {(api.error || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.error}</div>}
         {workspace.ready && workspace.activeCreation ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-white/10 bg-black/75 p-2 lg:flex-row lg:overflow-hidden">
             <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
-            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onOpenSettings={() => setShowApiSettings(true)} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
+            <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} />
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
         <footer className="flex shrink-0 items-center justify-center gap-3 pt-3 text-center text-xs text-gray-400">
@@ -153,10 +150,6 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
           {appVersion && <><span aria-hidden="true" className="text-white/25">·</span><span aria-label={`应用版本 ${appVersion}`}>{appVersion === "development" ? "开发版" : `版本 ${appVersion}`}</span></>}
         </footer>
       </main>
-      <ApiSettingsModal open={showApiSettings} onOpenChange={setShowApiSettings} settings={api.settings} models={api.models} mappings={api.mappings} modelsSynced={api.modelsSynced} onSave={(settings, models, mappings, synced) => {
-        api.saveSettings(settings, models, mappings, synced)
-        showToast("API 配置已保存")
-      }} />
       <Suspense fallback={null}>{showHelp && <HowItWorksModal open={showHelp} onOpenChange={setShowHelp} />}</Suspense>
     </div>
   )
@@ -165,8 +158,7 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
 interface EditorProps {
   creation: Creation
   workspace: CreativeWorkspaceController
-  api: ReturnType<typeof useApiSettings>
-  onOpenSettings: () => void
+  api: ReturnType<typeof useModelCatalog>
   onToast: Toast
   onUpload: (id: string, file: File, slot: 1 | 2) => Promise<void>
   onClearImage: (id: string, slot: 1 | 2) => void
@@ -177,12 +169,12 @@ interface EditorProps {
   onCancel: (id: string, generationId: string) => void
 }
 
-function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel }: EditorProps) {
+function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel }: EditorProps) {
   const draft = creation.draft
   const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
   const pending = creation.versions.find(version => version.status === "loading")
   const selectedMapping = resolveModelMapping(api.mappings, draft.selectedMappingId)
-  const { availableAspectRatios, closestAvailable } = useAspectRatio(selectedMapping?.modelId || "")
+  const { availableAspectRatios, closestAvailable } = useAspectRatio("", selectedMapping?.aspectRatios)
   const patch = useCallback((value: Partial<CreationDraft>) => workspace.patchDraft(creation.id, value), [creation.id, workspace.patchDraft])
   useEffect(() => {
     if (pending || !api.ready) return
@@ -274,7 +266,8 @@ function CreationEditor({ creation, workspace, api, onOpenSettings, onToast, onU
   return (
     <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
       <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-3 lg:overflow-y-auto lg:pr-2">
-        <InputSection mappings={api.mappings} apiMode={api.settings.apiMode} apiConfigured={api.isConfigured} onOpenApiSettings={onOpenSettings}
+        {api.ready && !api.error && draft.selectedMappingId && !selectedMapping && <p role="alert" className="mb-2 text-xs text-amber-300">之前选择的模型已被移除，请重新选择模型。</p>}
+        <InputSection mappings={api.mappings} apiMode={api.apiMode} apiConfigured={api.isConfigured}
           prompt={draft.prompt} setPrompt={prompt => patch({ prompt })} aspectRatio={draft.aspectRatio} setAspectRatio={aspectRatio => patch({ aspectRatio })} availableAspectRatios={availableAspectRatios}
           selectedMappingId={draft.selectedMappingId} setSelectedMappingId={selectedMappingId => patch({ selectedMappingId })} quality={draft.quality} setQuality={quality => patch({ quality })}
           thinkingLevel="minimal" setThinkingLevel={noop} resolution="1K" setResolution={noop} useGrounding={false} setUseGrounding={noop}

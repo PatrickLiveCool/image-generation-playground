@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { LogOut, Shield } from "lucide-react"
+import { LogOut, Shield, Settings2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AccountLoading, AccountShell } from "@/components/account/account-shell"
 import { AccountVisibilityContext } from "@/components/account/account-visibility"
@@ -121,6 +121,7 @@ export function AccountGate({ children, admin = false }: {
             <p className="min-w-0 truncate text-muted-foreground"><span className="text-foreground">{user.name}</span><span className="ml-2">@{user.username}</span></p>
             <nav className="flex items-center gap-2" aria-label="账号操作">
               {user.role === "admin" && <Button asChild variant="ghost" size="sm"><a href="/admin/users"><Shield className="size-4" aria-hidden="true" />管理后台</a></Button>}
+              {user.role === "admin" && <Button asChild variant="ghost" size="sm"><a href="/admin/models"><Settings2 className="size-4" aria-hidden="true" />模型设置</a></Button>}
               <Button type="button" size="sm" variant="ghost" onClick={() => void logout()}><LogOut className="size-4" aria-hidden="true" />退出</Button>
             </nav>
           </div>

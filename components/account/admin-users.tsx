@@ -176,6 +176,7 @@ function AdminUsersManager({ currentUser }: { currentUser: AccountUser }) {
       <div className="space-y-2"><a href="/" className="text-sm text-muted-foreground underline-offset-4 hover:underline">返回创作</a><h1 className="text-2xl font-semibold">账号管理</h1><p className="text-sm text-muted-foreground">创建普通用户，管理账号状态和临时密码。</p></div>
       <div className="flex gap-2"><Button variant="outline" disabled={loading || pending} onClick={() => void load(offset)}><RefreshCw className="size-4" aria-hidden="true" />刷新</Button><Button disabled={pending || loading || !!loadError} onClick={() => { setCreateError(""); setCreateOpen(true) }}><Plus className="size-4" aria-hidden="true" />新增账号</Button></div>
     </header>
+    <nav aria-label="后台导航" className="flex gap-4 border-b border-border pb-3 text-sm"><a href="/admin/users" aria-current="page" className="font-medium">账号管理</a><a href="/admin/models" className="text-muted-foreground hover:underline">模型设置</a></nav>
     {notice && <p role="status" aria-live="polite" className="border border-border p-4 text-sm">{notice}</p>}
     {(actionError || loadError) && <p ref={errorFocus} tabIndex={-1} role="alert" aria-live="assertive" className="border border-red-400/50 p-4 text-sm leading-6 text-red-400">{actionError || loadError}</p>}
     {loading ? <AccountLoading message="正在读取账号列表…" /> : loadError ? <div className="space-y-3 py-8 text-center"><p className="text-sm text-muted-foreground">账号列表暂时无法读取。</p><Button variant="outline" onClick={() => void load(offset)}>重新加载</Button></div> : page && <>

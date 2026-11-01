@@ -1,7 +1,7 @@
 import type { Generation } from "@/components/image-combiner/types"
 import type { Creation } from "./creation-types"
-import { normalizeProviderSettings, validateProviderSettings, type ModelMapping, type ProviderSettings } from "./api-provider-types"
-import { normalizeModelMappings, resolveModelMapping, validateModelMappings } from "./model-mappings"
+import type { PublicModelCatalog } from "./provider-configuration-types"
+import { resolveModelMapping } from "./model-mappings"
 import { composePrompt, MAX_DOCUMENT_CHARS, validateDocumentFile } from "./document-context"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -10,15 +10,14 @@ const ASPECT_RATIOS = new Set(["square", "portrait", "landscape", "wide", "4:3",
 
 export interface BuildCreationRequestInput {
   creation: Creation
-  settings: ProviderSettings
-  mappings: ModelMapping[]
+  catalog: PublicModelCatalog
   generationId?: string
   now?: number
 }
 
 function validateImageSource(source: string): void {
-  // Relative asset capabilities and older inline images are resolved by the server.
-  if (source.startsWith("/api/assets/") || /^data:image\/(?:png|jpe?g|webp|gif);base64,/.test(source)) return
+  // Private references are resolved with the same account ownership checks.
+  if (/^\/api\/images\/[0-9a-f-]{36}$/.test(source) || /^data:image\/(?:png|jpe?g|webp|gif);base64,/.test(source)) return
   try {
     const url = new URL(source)
     if (url.protocol === "https:" && !url.username && !url.password && !url.hash) return
@@ -27,7 +26,7 @@ function validateImageSource(source: string): void {
 }
 
 /** Capture one creation's current inputs before any asynchronous work starts. */
-export function buildCreationRequest({ creation, settings, mappings, generationId = crypto.randomUUID(), now = Date.now() }: BuildCreationRequestInput): { formData: FormData; generation: Generation } {
+export function buildCreationRequest({ creation, catalog, generationId = crypto.randomUUID(), now = Date.now() }: BuildCreationRequestInput): { formData: FormData; generation: Generation } {
   const { draft } = creation
   if (!UUID.test(creation.id) || !UUID.test(generationId)) throw new Error("创作或版本标识无效，请刷新后重试。")
   if (creation.versions.some(version => version.status === "loading")) throw new Error("当前创作正在生成，请等待完成后再修改。")
@@ -39,16 +38,12 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   if (documentText.length > MAX_DOCUMENT_CHARS) throw new Error(`文档文字不能超过 ${MAX_DOCUMENT_CHARS} 个字符，请重新上传精简后的文档。`)
   if (draft.documentFile) validateDocumentFile(draft.documentFile)
 
-  const providerError = validateProviderSettings(settings)
-  if (providerError) throw new Error(providerError)
-  if (settings.baseUrl.length > 2048 || settings.apiKey.length > 4096) throw new Error("API 地址或 Token 长度无效，请检查 API 设置。")
-  const provider = normalizeProviderSettings(settings)
-  const selectedMapping = resolveModelMapping(mappings, draft.selectedMappingId)
-  if (!selectedMapping) throw new Error("请选择有效的模型映射，或到 API 设置中添加。")
-  const mappingError = validateModelMappings([selectedMapping])
-  if (mappingError) throw new Error(mappingError)
-  const [mapping] = normalizeModelMappings([selectedMapping])
+  if (!catalog.configured) throw new Error("暂无可用模型，请联系管理员完成配置。")
+  const mapping = resolveModelMapping(catalog.mappings, draft.selectedMappingId)
+  if (!mapping) throw new Error("所选模型已被移除或不可用，请刷新目录并重新选择。")
+  if (!mapping.id || !mapping.name.trim()) throw new Error("模型目录无效，请刷新后重试。")
   if (!ASPECT_RATIOS.has(draft.aspectRatio)) throw new Error("宽高比参数无效。")
+  if (!mapping.aspectRatios.includes(draft.aspectRatio)) throw new Error("当前模型不支持所选宽高比，请重新选择。")
   if (!["auto", "low", "medium", "high"].includes(draft.quality)) throw new Error("画质参数无效。")
   if (typeof draft.useUrls !== "boolean") throw new Error("请选择参考图片的输入方式。")
 
@@ -58,7 +53,6 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   }
   if (base?.imageUrl) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(base.id)) throw new Error("基准版本标识无效，请重新选择要修改的版本。")
-    validateImageSource(base.imageUrl)
   }
 
   const files = [draft.image1, draft.image2].filter((file): file is File => file !== null)
@@ -79,12 +73,10 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   const mode = base || references.length ? "image-editing" : "text-to-image"
   const formData = new FormData()
   for (const [key, value] of Object.entries({
-    baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiMode: provider.apiMode,
-    selectedModel: mapping.modelId, prompt: effectivePrompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
-    mode, creationId: creation.id, clientVersionId: generationId, version: String(version),
+    mappingId: mapping.id, configRevision: String(catalog.revision), prompt: effectivePrompt, aspectRatio: draft.aspectRatio, quality: draft.quality,
+    mode, creationId: creation.id, clientRequestId: generationId,
   })) formData.set(key, value)
   if (base?.imageUrl) {
-    formData.set("baseImageUrl", base.imageUrl)
     formData.set("parentVersionId", base.id)
   }
   references.forEach((reference, index) => {
@@ -93,10 +85,10 @@ export function buildCreationRequest({ creation, settings, mappings, generationI
   })
   if (draft.documentFile) formData.set("document", draft.documentFile, draft.documentFile.name)
 
-  // Credentials and reference capabilities belong only in the request, never in history metadata.
+  // Only a stable mapping ID is submitted. The server resolves its configuration and original base asset.
   const generation: Generation = {
     id: generationId, creationId: creation.id, version, parentVersionId: base?.id ?? null,
-    model: mapping.modelId, modelLabel: mapping.name, status: "loading", progress: 0, phase: "sending",
+    model: mapping.id, modelLabel: mapping.name, status: "loading", progress: 0, phase: "sending",
     imageUrl: null, prompt: draft.prompt, timestamp: now, aspectRatio: draft.aspectRatio, mode,
   }
   return { formData, generation }

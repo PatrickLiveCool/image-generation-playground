@@ -66,6 +66,14 @@ jobs:
         env:
           IMAGE_AUTH_TEST_DATABASE_URL: postgresql://qintopia_image_app:synthetic-local-runtime-only@127.0.0.1:32768/qintopia_image
         run: pnpm test:auth
+      - name: Verify encrypted provider configuration and authorization
+        env:
+          IMAGE_PROVIDER_TEST_DATABASE_URL: postgresql://qintopia_image_app:synthetic-local-runtime-only@127.0.0.1:32768/qintopia_image
+        run: pnpm test:provider
+      - name: Verify atomic generation admission and idempotency
+        env:
+          IMAGE_ADMISSION_TEST_DATABASE_URL: postgresql://qintopia_image_app:synthetic-local-runtime-only@127.0.0.1:32768/qintopia_image
+        run: pnpm test:admission
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'

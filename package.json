@@ -15,7 +15,9 @@
     "test:database": "node --import tsx --test tests/database-integration.test.ts",
     "db:migrate": "node --import tsx scripts/database/migrate.ts",
     "db:bootstrap-admin": "node --import tsx scripts/database/bootstrap-admin.ts",
-    "test:account-http": "node --import tsx --test tests/account-http-integration.test.mjs"
+    "test:account-http": "node --import tsx --test tests/account-http-integration.test.mjs",
+    "test:provider": "node --import tsx --test tests/provider-configuration-integration.test.ts",
+    "test:admission": "node --import tsx --test tests/generation-admission-integration.test.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "latest",

@@ -188,18 +188,16 @@ test("真实 PostgreSQL 账号生命周期、并发与权限", async (t) => {
       ] as const) {
         const forbidden = request("/api/provider/models", { baseUrl: "https://relay.example.invalid", apiKey: "synthetic-token" }, headers)
         forbidden.headers.set("origin", requestOrigin)
-        const parse = context.mock.method(forbidden, "json", async () => { throw new Error("Unauthorized request body was parsed") })
         const response = await modelsResponse(forbidden)
         assert.equal(response.status, status)
         assert.equal((await response.json()).error.code, code)
-        assert.equal(parse.mock.callCount(), 0)
+        assert.equal(forbidden.bodyUsed, false)
       }
       const admin = request("/api/provider/models", {}, adminHeaders)
-      const parse = context.mock.method(admin, "json", async () => ({}))
       const response = await modelsResponse(admin)
       assert.equal(response.status, 400)
-      assert.deepEqual(await response.json(), { error: "请输入有效的 HTTPS 地址。" })
-      assert.equal(parse.mock.callCount(), 1)
+      assert.equal((await response.json()).error.code, "INVALID_INPUT")
+      assert.equal(admin.bodyUsed, true)
       assert.equal(lookups.mock.callCount(), 0)
       assert.equal(outgoing.mock.callCount(), 0)
     } finally {

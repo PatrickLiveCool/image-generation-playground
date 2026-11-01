@@ -20,9 +20,9 @@ after(() => rmSync(dir, { recursive: true, force: true }))
 
 const creationId = "11111111-1111-4111-8111-111111111111"
 const generationId = "22222222-2222-4222-8222-222222222222"
-const originalImage = "/api/assets/image-playground/runs/legacy/outputs/final.png?access=original-capability"
-const settings = { baseUrl: " https://relay.example/v1/ ", apiKey: " test-token ", apiMode: "images" as const }
-const mappings = [{ id: "quality", name: " 极致 ", modelId: " provider-model-a " }, { id: "balanced", name: "均衡", modelId: "provider-model-b" }]
+const originalImage = "/api/images/33333333-3333-4333-8333-333333333333"
+const mappings = [{ id: "quality", name: "极致", aspectRatios: ["square", "landscape"] }, { id: "balanced", name: "均衡", aspectRatios: ["square"] }]
+const catalog = { revision: 4, configured: true, apiMode: "images" as const, mappings }
 const reference = (name = "reference.png") => new File([new Uint8Array([137,80,78,71])], name, { type: "image/png" })
 function creation(draft: Partial<CreationDraft> = {}, versions: Generation[] = [], selectedVersionId: string | null = null): Creation {
   return {
@@ -34,24 +34,29 @@ function creation(draft: Partial<CreationDraft> = {}, versions: Generation[] = [
 function version(id: string, number: number, patch: Partial<Generation> = {}): Generation {
   return { id, version: number, status: "complete", progress: 100, imageUrl: originalImage, prompt: "旧提示词", timestamp: number, ...patch }
 }
-const build = (value: Creation, overrides: Partial<BuildCreationRequestInput> = {}) => buildCreationRequest({ creation: value, settings, mappings, generationId, now: 1234, ...overrides })
+const build = (value: Creation, overrides: Partial<BuildCreationRequestInput> = {}) => buildCreationRequest({ creation: value, catalog, generationId, now: 1234, ...overrides })
 
-test("first request resolves the stable alias to its current model and snapshots the original prompt", () => {
+test("旧草稿中的比例必须仍属于当前映射的能力列表", () => {
+  assert.throws(() => build(creation({ selectedMappingId: "balanced", aspectRatio: "landscape" })), /当前模型不支持/)
+  assert.equal(build(creation({ aspectRatio: "landscape" })).formData.get("aspectRatio"), "landscape")
+})
+
+test("first request submits only the stable alias and snapshots the original prompt without provider secrets", () => {
   const current = creation()
   const before = structuredClone(current)
   const { formData, generation } = build(current)
-  assert.equal(formData.get("selectedModel"), "provider-model-a")
-  assert.equal(formData.get("baseUrl"), "https://relay.example/v1")
-  assert.equal(formData.get("apiKey"), "test-token")
+  assert.equal(formData.get("mappingId"), "quality")
+  assert.equal(formData.get("configRevision"), "4")
+  for (const key of ["selectedModel", "baseUrl", "apiKey", "apiMode", "baseImageUrl", "version"]) assert.equal(formData.has(key), false)
   assert.equal(formData.get("prompt"), current.draft.prompt)
-  assert.equal(formData.get("version"), "1")
+  assert.equal(generation.version, 1)
   assert.equal(formData.get("creationId"), creationId)
-  assert.equal(formData.get("clientVersionId"), generationId)
+  assert.equal(formData.get("clientRequestId"), generationId)
   assert.equal(formData.get("mode"), "text-to-image")
   assert.equal(formData.has("baseImageUrl"), false)
   assert.equal(formData.has("parentVersionId"), false)
   assert.equal(generation.modelLabel, "极致")
-  assert.equal(generation.model, "provider-model-a")
+  assert.equal(generation.model, "quality")
   assert.equal(generation.parentVersionId, null)
   assert.equal(generation.timestamp, 1234)
   assert.equal(generation.prompt, current.draft.prompt)
@@ -80,14 +85,14 @@ test("a document that makes the submitted prompt exceed the provider limit is re
   assert.throws(() => build(creation({ prompt: "p".repeat(1_000), documentName: "brief.txt", documentText: "x".repeat(4_000) })), /合计不能超过 5000 字/)
 })
 
-test("editing sends the selected original asset and parent with one additional reference", async () => {
+test("editing sends the immutable parent ID for the server to resolve and one additional reference", async () => {
   const image = reference()
   const current = creation({ image1: image }, [version("gen-v1", 1)], "gen-v1")
   const { formData, generation } = build(current)
-  assert.equal(formData.get("baseImageUrl"), originalImage)
+  assert.equal(formData.has("baseImageUrl"), false)
   assert.equal(formData.get("parentVersionId"), "gen-v1")
   assert.equal(formData.get("mode"), "image-editing")
-  assert.equal(formData.get("version"), "2")
+  assert.equal(formData.has("version"), false)
   assert.deepEqual(new Uint8Array(await (formData.get("image1") as File).arrayBuffer()), new Uint8Array(await image.arrayBuffer()))
   assert.equal(formData.has("image2"), false)
   assert.equal(generation.parentVersionId, "gen-v1")
@@ -99,7 +104,7 @@ test("editing sends the selected original asset and parent with one additional r
 test("branching from V1 after V2 creates V3 and ignores failed attempt numbers", () => {
   const current = creation({}, [version("gen-v1", 1), version("gen-v2", 2), version("failed", 99, { status: "error", imageUrl: null })], "gen-v1")
   const { formData, generation } = build(current)
-  assert.equal(formData.get("version"), "3")
+  assert.equal(formData.has("version"), false)
   assert.equal(formData.get("parentVersionId"), "gen-v1")
   assert.equal(generation.version, 3)
 })
@@ -134,14 +139,10 @@ test("mixed reference input modes reject before either set can be discarded", ()
   assert.throws(() => build(creation({ image1: new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.png") })), /10 MB/)
 })
 
-test("invalid connection, mapping, prompt and reference parameters cannot create a request", () => {
-  for (const invalid of [
-    { ...settings, baseUrl: "" }, { ...settings, baseUrl: "http://relay.example" },
-    { ...settings, baseUrl: "https://relay.example?key=secret" }, { ...settings, apiKey: " " },
-    { ...settings, apiKey: "token\n" }, { ...settings, apiMode: "unsupported" as never },
-  ]) assert.throws(() => build(creation(), { settings: invalid }))
-  assert.throws(() => build(creation({ selectedMappingId: "deleted" })), /模型映射/)
-  assert.throws(() => build(creation(), { mappings: [{ ...mappings[0], modelId: "bad\nmodel" }] }), /模型 ID/)
+test("unavailable catalog, mapping, prompt and reference parameters cannot create a request", () => {
+  assert.throws(() => build(creation(), { catalog: { ...catalog, configured: false } }), /暂无可用模型/)
+  assert.throws(() => build(creation({ selectedMappingId: "deleted" })), /重新选择/)
+  assert.throws(() => build(creation(), { catalog: { ...catalog, mappings: [] } }), /重新选择/)
   assert.throws(() => build(creation({ prompt: "  " })), /提示词/)
   assert.throws(() => build(creation({ prompt: "a".repeat(5001) })), /5000/)
   const wideRequest = build(creation({ aspectRatio: "landscape" }))
@@ -149,16 +150,18 @@ test("invalid connection, mapping, prompt and reference parameters cannot create
   assert.throws(() => build(creation({ quality: "unknown" as never })), /画质参数/)
 })
 
-test("current mapping changes apply without depending on a model name baked into history", () => {
-  const result = build(creation({}, [version("gen-v1", 1, { model: "old-model", modelLabel: "旧名称" })], "gen-v1"), { mappings: [{ id: "quality", name: "极致", modelId: "new-model" }] })
-  assert.equal(result.formData.get("selectedModel"), "new-model")
-  assert.equal(result.generation.model, "new-model")
+test("renaming keeps stable selection and snapshots the new display name without guessing the provider model", () => {
+  const result = build(creation({}, [version("gen-v1", 1, { model: "old-model", modelLabel: "旧名称" })], "gen-v1"), { catalog: { ...catalog, mappings: [{ ...mappings[0], name: "新名称" }] } })
+  assert.equal(result.formData.get("mappingId"), "quality")
+  assert.equal(result.formData.has("selectedModel"), false)
+  assert.equal(result.generation.model, "quality")
+  assert.equal(result.generation.modelLabel, "新名称")
 })
 
 test("new identifiers default to UUIDs and concurrent requests in one creation are rejected", () => {
-  const { generation, formData } = buildCreationRequest({ creation: creation(), settings, mappings })
+  const { generation, formData } = buildCreationRequest({ creation: creation(), catalog })
   assert.match(generation.id, /^[0-9a-f-]{36}$/)
-  assert.equal(formData.get("clientVersionId"), generation.id)
+  assert.equal(formData.get("clientRequestId"), generation.id)
   assert.throws(() => build(creation({}, [version("pending", 2, { status: "loading", imageUrl: null })])), /正在生成/)
   assert.throws(() => build(creation(), { generationId: "invalid" }), /标识无效/)
 })

@@ -8,6 +8,8 @@ const ACCOUNT_TEST_USERNAMES = new Set([
   "test_admin", "other_admin", "new_user", "rollback_user", "expired_user", "second_admin",
   "norm_user", "rate_user", "admin_rate_user",
   "http_acceptance_admin", "http_acceptance_user",
+  "provider-admin-a", "provider-admin-b", "provider-user", "provider-temp",
+  "admission_test_user_a", "admission_test_user_b",
 ])
 
 type FixtureIdentity = {

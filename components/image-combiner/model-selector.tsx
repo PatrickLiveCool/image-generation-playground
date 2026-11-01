@@ -3,11 +3,11 @@
 import { useState } from "react"
 import { Check, ChevronDown } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import type { ModelMapping } from "@/lib/api-provider-types"
+import type { PublicModelMapping } from "@/lib/provider-configuration-types"
 import { resolveModelMapping } from "@/lib/model-mappings"
 
 export function ModelSelector({ value, onChange, mappings }: {
-  value: string; onChange: (id: string) => void; mappings: ModelMapping[]
+  value: string; onChange: (id: string) => void; mappings: PublicModelMapping[]
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -28,7 +28,7 @@ export function ModelSelector({ value, onChange, mappings }: {
               <span className="break-words min-w-0 flex-1">{mapping.name}</span>{value === mapping.id && <Check className="size-3 shrink-0" />}
             </button>
           ))}
-          {!mappings.length && <p className="text-xs text-gray-400 leading-relaxed">还没有模型映射。先在设置里添加显示名称，并选择对应模型。</p>}
+          {!mappings.length && <p className="text-xs text-gray-400 leading-relaxed">暂无模型名称，请联系管理员配置。</p>}
           {!!mappings.length && !filtered.length && <p className="text-xs text-gray-400">没有匹配的名称。</p>}
         </div>
       </PopoverContent>

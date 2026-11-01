@@ -33,6 +33,6 @@ export function restoreModelMappings(value: unknown): ModelMapping[] {
 }
 
 /** Selection follows the mapping's stable identity through renames and reordering. */
-export function resolveModelMapping(mappings: ModelMapping[], selectedId: string): ModelMapping | undefined {
+export function resolveModelMapping<T extends { id: string }>(mappings: readonly T[], selectedId: string): T | undefined {
   return mappings.find(mapping => mapping.id === selectedId)
 }

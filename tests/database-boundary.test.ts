@@ -109,7 +109,7 @@ test("fixed migration source rejects SQL alterations and alternate paths before 
   }
   assert.throws(() => verifyApprovedMigration("../0001-accounts.sql", sql), /审核哈希/)
   assert.throws(() => verifyApprovedMigration("0002-unreviewed.sql", sql), /审核哈希/)
-  assert.equal((await loadMigrations()).length, 1)
+  assert.deepEqual((await loadMigrations()).map(item => item.name), ["0001-accounts.sql", "0002-provider-settings.sql", "0003-provider-admission.sql"])
 })
 
 test("migration identity failure never sends ledger creation or advisory lock", async () => {
@@ -121,7 +121,8 @@ test("migration identity failure never sends ledger creation or advisory lock", 
 })
 
 test("migration ledger skips prior SQL, rejects drift and rolls back failures while releasing lock", async () => {
-  const migration = (await loadMigrations())[0]
+  const migrations = await loadMigrations()
+  const migration = migrations[0]
   const configuration = readDatabaseConfiguration("migration", environment)
   for (const scenario of ["applied", "skipped", "drift", "failed"] as const) {
     const sent: string[] = []
@@ -139,7 +140,8 @@ test("migration ledger skips prior SQL, rejects drift and rolls back failures wh
       assert.ok(!sent.includes("COMMIT"))
     } else {
       const result = await runMigrations({ query }, configuration)
-      assert.deepEqual(result[scenario], [migration.name])
+      assert.deepEqual(result[scenario], scenario === "applied" ? migrations.map(item => item.name) : [migration.name])
+      if (scenario === "skipped") assert.deepEqual(result.applied, migrations.slice(1).map(item => item.name))
       assert.ok(sent.includes("COMMIT"))
     }
     assert.equal(sent.includes(migration.sql), scenario === "applied" || scenario === "failed")
