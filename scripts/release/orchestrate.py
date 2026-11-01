@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from common import APPLICATION, ARCHIVE, FILES, ROOT_PREFIX, SHA256, ReleaseError, json_bytes, release_prefix, require, utcnow, validate_identity, validate_manifest
+from common import APPLICATION, ARCHIVE, FILES, ROOT_PREFIX, SHA256, ReleaseError, is_account_release, json_bytes, release_prefix, require, utcnow, validate_identity, validate_manifest
 from cos import CosStore, KEY, MARKER, object_identity
 
 
@@ -84,6 +84,12 @@ def validate_receipt(receipt, expected_prefix=None, expected_manifest_sha=None, 
     if expected_prefix is not None:
         current = receipt.get("current") or {}
         require(current.get("prefix") == expected_prefix and current.get("manifestSha256") == expected_manifest_sha and current.get("manifest") == expected_manifest, "server receipt does not match the requested release")
+        if is_account_release(expected_manifest):
+            database = receipt.get("database", {}).get("after", {})
+            require(receipt.get("assetAccessProtocol") == "account-private-v1" and database.get("compatible") is True
+                    and database.get("version") == expected_manifest["database"]["maxVersion"] and database.get("pending") == []
+                    and database.get("connectionBudget") == 9 and isinstance(database.get("ledgerSha256"), str)
+                    and SHA256.fullmatch(database["ledgerSha256"]), "server did not verify the account access floor and database ledger")
     return protected
 
 
@@ -104,6 +110,8 @@ def verify_public(manifest):
                 require(value.get("status") == "ready", "public application is not ready")
             else:
                 require(value.get("managed") is True and value.get("browserWorkspaceSchema") == manifest["browserWorkspaceSchema"] and value.get("assetCapabilityVersion") == manifest["assetCapabilityVersion"], "public compatibility metadata differs from release")
+                if is_account_release(manifest):
+                    require(all(value.get(key) == manifest[key] for key in ["databaseMode", "assetAccessProtocol", "database"]), "public database or account access metadata differs from release")
     except ReleaseError:
         raise
     except Exception:

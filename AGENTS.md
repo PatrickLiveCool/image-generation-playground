@@ -27,5 +27,5 @@
 - 正式发布使用 `scripts/release/` 和 root 所有的受限服务器入口。`ops/image-app-deploy/` 保留的是早期部署记录，不能不核对当前状态就重跑一次性脚本。
 - 发布制品前缀为 `qintopia-image/releases/`；用户图片前缀为 `image-playground/`。两类凭据与清理范围分离，任何发布清理都不能触碰图片、证书和应用配置。
 - 不把凭据、签名图片地址、用户快照、SSH 私钥或 `.local-ops/` 加入 Git。保留 `ASSET_ACCESS_SECRET`，更换会破坏已有图片链接。
-- 没有服务端数据库；浏览器 workspace schema 与图片能力链接版本仍是回退边界。执行前核对 `deploy/release-policy.json`。
+- 账号版使用项目专属 PostgreSQL `qintopia_image` / `app`；数据库迁移契约、账号私有访问协议、浏览器 workspace schema 与图片能力链接版本共同约束回退。执行前核对 `deploy/release-policy.json`；跨越账号访问底线后，不得回退到匿名版本。
 - 安装工具、合并 PR、Publish Release、切换应用和清理旧版本是不同动作。只有在当前授权覆盖相应动作时执行，并保留明确的恢复证据。

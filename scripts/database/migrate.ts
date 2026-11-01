@@ -9,12 +9,36 @@ import {
   type DatabaseConfiguration, type DatabaseInspectionClient,
 } from "../../lib/database-target"
 import { approvedMigrations } from "./migration-catalog"
-
-const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url))
-const MIGRATIONS_ROOT = path.join(PROJECT_ROOT, "migrations")
+import { MAINTENANCE_BUNDLED, PROJECT_ROOT, MIGRATIONS_ROOT } from "./runtime-context"
 const LOCK = [1953065063, 1768776039]
 
-type Migration = { version: string; name: string; sha256: string; sql: string }
+export type Migration = { version: string; name: string; sha256: string; sql: string }
+export type MigrationLedgerEntry = { version: string; name: string; sha256: string }
+export const MIGRATION_LEDGER_EXISTS_SQL = "SELECT to_regclass('app.schema_migrations') IS NOT NULL AS present"
+export const MIGRATION_LEDGER_SQL = "SELECT version, name, sha256 FROM app.schema_migrations ORDER BY version"
+
+/** 账本必须是审核清单的完整前缀；未知、重复、缺口或篡改均拒绝。 */
+export function validateMigrationHistory(rows: Record<string, unknown>[], migrations: readonly MigrationLedgerEntry[]): MigrationLedgerEntry[] {
+  if (rows.length > migrations.length) throw new DatabaseBoundaryError("MIGRATION_DRIFT", "已执行迁移与审核文件不一致，拒绝继续。")
+  return rows.map((row, index) => {
+    const expected = migrations[index]
+    if (!expected || row.version !== expected.version || row.name !== expected.name || row.sha256 !== expected.sha256) {
+      throw new DatabaseBoundaryError("MIGRATION_DRIFT", "已执行迁移与审核文件不一致，拒绝继续。")
+    }
+    return { version: expected.version, name: expected.name, sha256: expected.sha256 }
+  })
+}
+
+/** 仅迁移身份读取账本；不存在时只返回空前缀，不创建表。 */
+export async function inspectMigrationHistory(client: DatabaseInspectionClient, migrations: readonly MigrationLedgerEntry[]): Promise<{ present: boolean; ledger: MigrationLedgerEntry[] }> {
+  const presence = await client.query(MIGRATION_LEDGER_EXISTS_SQL)
+  if (presence.rows.length !== 1 || typeof presence.rows[0].present !== "boolean") {
+    throw new DatabaseBoundaryError("MIGRATION_DRIFT", "无法核对项目迁移账本，拒绝继续。")
+  }
+  if (!presence.rows[0].present) return { present: false, ledger: [] }
+  const result = await client.query(MIGRATION_LEDGER_SQL)
+  return { present: true, ledger: validateMigrationHistory(result.rows, migrations) }
+}
 
 function sourceError(): never {
   throw new DatabaseBoundaryError("MIGRATION_SOURCE", "迁移来源或审核哈希不符合固定项目清单。")
@@ -38,7 +62,9 @@ export async function loadMigrations(): Promise<Migration[]> {
   try {
     await verifyTrustedPath(PROJECT_ROOT, true)
     await verifyTrustedPath(MIGRATIONS_ROOT, true)
-    if (await realpath(MIGRATIONS_ROOT) !== path.join(await realpath(PROJECT_ROOT), "migrations")) sourceError()
+    const expected = path.join(await realpath(PROJECT_ROOT), ...(MAINTENANCE_BUNDLED ? ["maintenance", "migrations"] : ["migrations"]))
+    if (await realpath(MIGRATIONS_ROOT) !== expected) sourceError()
+    if (MAINTENANCE_BUNDLED) await verifyTrustedPath(path.dirname(MIGRATIONS_ROOT), true)
     const names = (await readdir(MIGRATIONS_ROOT)).sort()
     if (names.length !== Object.keys(approvedMigrations).length) sourceError()
     const migrations: Migration[] = []
@@ -77,24 +103,20 @@ export async function runMigrations(
     locked = true
     await client.query("BEGIN")
     transaction = true
-    await client.query(`CREATE TABLE IF NOT EXISTS app.schema_migrations (
+    // 先核对已有账本。漂移不能通过CREATE/REVOKE等写入被掩盖。
+    const history = await inspectMigrationHistory(client, migrations)
+    if (!history.present) {
+      await client.query(`CREATE TABLE app.schema_migrations (
       version text PRIMARY KEY, name text NOT NULL UNIQUE,
       sha256 text NOT NULL CHECK (length(sha256) = 64),
       applied_at timestamptz NOT NULL DEFAULT now()
     )`)
-    // 账本只由迁移身份维护；业务表默认 CRUD 不应让运行身份改写迁移历史。
-    await client.query("REVOKE ALL ON TABLE app.schema_migrations FROM qintopia_image_app")
-    const history = await client.query("SELECT version, name, sha256 FROM app.schema_migrations ORDER BY version")
-    const known = new Map(migrations.map((migration) => [migration.version, migration]))
-    for (const row of history.rows) {
-      const expected = known.get(String(row.version))
-      if (!expected || expected.name !== row.name || expected.sha256 !== row.sha256) {
-        throw new DatabaseBoundaryError("MIGRATION_DRIFT", "已执行迁移与审核文件不一致，拒绝继续。")
-      }
+      // 账本只由迁移身份维护；不放宽运行身份的任何账本权限。
+      await client.query("REVOKE ALL ON TABLE app.schema_migrations FROM qintopia_image_app")
     }
     const applied: string[] = []
     const skipped: string[] = []
-    const completed = new Set(history.rows.map((row) => row.version))
+    const completed = new Set(history.ledger.map((row) => row.version))
     for (const migration of migrations) {
       if (completed.has(migration.version)) { skipped.push(migration.name); continue }
       await client.query(migration.sql)
@@ -129,7 +151,7 @@ export async function migrateDatabase(environment: NodeJS.ProcessEnv = process.e
   } finally { await pool.end() }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (!MAINTENANCE_BUNDLED && process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   if (process.argv.length !== 2) {
     console.error("迁移命令不接受目录或 SQL 参数。")
     process.exitCode = 1

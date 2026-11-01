@@ -8,7 +8,7 @@ import sys
 def validated(arguments, sudo_user=None):
     if arguments in [['status'], ['maintenance'], ['maintenance', 'dry-run'], ['maintenance', 'apply']]:
         return arguments
-    if arguments in [['bootstrap'], ['recover']] and sudo_user != 'qintopia-image-deploy':
+    if arguments in [[name] for name in ['bootstrap', 'recover', 'service-maintenance', 'database-status', 'database-backup', 'database-restore', 'database-verify-restore', 'database-bootstrap-admin', 'database-verify-bootstrap-admin']] and sudo_user != 'qintopia-image-deploy':
         return arguments
     if len(arguments) != 5 or arguments[0] not in ['deploy', 'rollback']:
         raise ValueError('restricted release command required')

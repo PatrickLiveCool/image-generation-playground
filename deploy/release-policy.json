@@ -1,11 +1,24 @@
 {
   "application": "qintopia-image",
   "version": "0.3.0",
-  "databaseMode": "none",
+  "databaseMode": "postgresql",
+  "assetAccessProtocol": "account-private-v1",
+  "database": {
+    "name": "qintopia_image",
+    "schema": "app",
+    "minVersion": "0004",
+    "maxVersion": "0004",
+    "migrations": [
+      { "name": "0001-accounts.sql", "sha256": "21d4c583ea7974706abde98a730f95146069324bc2814946e3763e7634a69064" },
+      { "name": "0002-provider-settings.sql", "sha256": "2c3b62df6a9edd90c071ecbac33bba336a3f8cd2db5800324e623bc522618308" },
+      { "name": "0003-provider-admission.sql", "sha256": "3a3543454f5fe1b1856dfc180af20bac15f9b896d7764b1fa8506ea3d588d0bd" },
+      { "name": "0004-private-workspace.sql", "sha256": "1c87968b7c023e46834897472d24b83248646e9014159f3f0c8a83738130fc2f" }
+    ]
+  },
   "browserWorkspaceSchema": 1,
   "assetCapabilityVersion": 1,
   "rollbackCompatibility": {
     "mode": "compatible",
-    "reason": "Rollback only to a verified successful release with browser workspace schema 1 and asset capability version 1. Preserve browser records, COS objects and ASSET_ACCESS_SECRET. Legacy timestamps are not semantic releases."
+    "reason": "仅回退到已验证成功且兼容当前数据库账本、account-private-v1 访问协议、浏览器工作区与图片能力版本的账号版。保留数据库记录、COS对象和 ASSET_ACCESS_SECRET；没有兼容目标时进入受控维护状态，不恢复旧匿名或 bearer 入口。"
   }
 }

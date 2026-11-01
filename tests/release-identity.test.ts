@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
-import { mkdtempSync, writeFileSync, symlinkSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync, symlinkSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 // @ts-expect-error Node's built-in TypeScript runner requires the file extension.
@@ -11,6 +11,38 @@ const identity = {
   platform: "linux/amd64", builtAt: "2026-10-26T00:00:00.000Z",
   browserWorkspaceSchema: 1, assetCapabilityVersion: 1,
 }
+const accountIdentity = { ...identity, schema: 2, databaseMode: "postgresql", assetAccessProtocol: "account-private-v1",
+  database: JSON.parse(readFileSync(new URL("../deploy/release-policy.json", import.meta.url), "utf8")).database }
+
+test("account identity includes the bounded project migration contract without publishing extra data", () => {
+  const result = validateReleaseIdentity({ ...accountIdentity, privateEnvironment: "must-not-publish" })
+  assert.deepEqual(result, accountIdentity)
+  assert.doesNotMatch(JSON.stringify(result), /must-not-publish/)
+  assert.throws(() => validateReleaseIdentity({ ...accountIdentity, schema: 1 }), /invalid/)
+  assert.throws(() => validateReleaseIdentity({ ...accountIdentity, databaseMode: "none" }), /invalid/)
+  assert.throws(() => validateReleaseIdentity({ ...accountIdentity, assetAccessProtocol: "public-bearer" }), /invalid/)
+})
+
+test("account identity rejects cross-project, incomplete or ambiguous migration contracts", () => {
+  for (const change of [
+    (value: any) => { value.name = "other_database" },
+    (value: any) => { value.schema = "public" },
+    (value: any) => { value.minVersion = "0000" },
+    (value: any) => { value.maxVersion = "9999" },
+    (value: any) => { value.migrations.reverse() },
+    (value: any) => { value.migrations.pop() },
+    (value: any) => { value.migrations[0].name = "../0001-accounts.sql" },
+    (value: any) => { value.migrations[0].sha256 = "bad" },
+    (value: any) => { value.migrations[0].secret = "must-not-publish" },
+  ]) {
+    const database = structuredClone(accountIdentity.database)
+    change(database)
+    assert.throws(() => validateReleaseIdentity({ ...accountIdentity, database }), /invalid/)
+  }
+  for (const stamp of ["2026-02-30T00:00:00Z", "2026-10-26T00:00:00+08:00", "2026-10-26"]) {
+    assert.throws(() => validateReleaseIdentity({ ...accountIdentity, builtAt: stamp }), /invalid/)
+  }
+})
 
 test("release identity reports only the verified artifact fields", () => {
   const result = validateReleaseIdentity({ ...identity, apiKey: "not-public", environment: { COS_SECRET_KEY: "not-public" } })

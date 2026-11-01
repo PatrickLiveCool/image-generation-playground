@@ -7,17 +7,20 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ARCHIVE, ReleaseError, safe_extract_runtime, sha256_file, validate_bundle
 from package import package_bundle, validate_source
+from smoke import verify_maintenance_runtime
 
 REV = "a" * 40
 BUILT = "2026-10-26T00:00:00Z"
+ROOT = Path(__file__).resolve().parents[3]
 
 
-def make_source(root, version="v0.1.0"):
+def make_source(root, version="v0.1.0", *, account=False):
     root = Path(root)
     for name in (".next/standalone/node_modules/tiny", ".next/static", "public", "deploy"):
         (root / name).mkdir(parents=True, exist_ok=True)
@@ -30,18 +33,90 @@ def make_source(root, version="v0.1.0"):
     (root / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
     policy = {"application": "qintopia-image", "version": version[1:], "databaseMode": "none", "browserWorkspaceSchema": 1,
               "assetCapabilityVersion": 1, "rollbackCompatibility": {"mode": "compatible", "reason": "Same browser and asset contracts."}}
+    if account:
+        policy = json.loads((ROOT / "deploy/release-policy.json").read_text())
+        policy["version"] = version[1:]
+        (root / "scripts/database").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/database/migration-catalog.ts", root / "scripts/database/migration-catalog.ts")
+        shutil.copytree(ROOT / "migrations", root / "migrations")
+        shutil.copytree(ROOT / "migrations", root / ".next/maintenance/migrations")
+        (root / ".next/maintenance/cli.mjs").write_text("console.log('synthetic maintenance fixture')\n")
     (root / "deploy/release-policy.json").write_text(json.dumps(policy))
     return root
 
 
-def fixture_bundle(root, version="v0.1.0", revision=REV):
-    source = make_source(Path(root) / ("source-" + version), version)
+def fixture_bundle(root, version="v0.1.0", revision=REV, *, account=False):
+    source = make_source(Path(root) / ("source-" + version), version, account=account)
     output = Path(root) / ("bundle-" + version)
     result = package_bundle(source, output, version, revision, built_at=BUILT, verify_source=False)
     return output, json.loads((output / "manifest.json").read_text()), result["manifestSha256"]
 
 
 class PackageTests(unittest.TestCase):
+    def test_smoke_uses_packaged_cli_and_sanitized_environment_for_read_only_local_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _bundle, manifest, _anchor = fixture_bundle(temporary, account=True)
+            budget = {"applicationProcesses": 2, "perApplication": 4, "maintenance": 1, "total": 9}
+            descriptor = {"application": "qintopia-image", "protocol": "account-private-v1", "database": manifest["database"],
+                          "commands": ["describe", "preflight", "migrate", "verify"], "connectionBudget": budget}
+            status = {"application": "qintopia-image", "release": {"version": manifest["version"], "revision": manifest["revision"]},
+                      "target": "local", "database": "qintopia_image", "schema": "app", "compatible": True, "secretsVerified": True,
+                      "pending": [], "ledger": [{"version": item["name"][:4], **item} for item in manifest["database"]["migrations"]], "connectionBudget": budget}
+            def run(command, **kwargs):
+                self.assertEqual(command[:2], ["node", "maintenance/cli.mjs"])
+                self.assertEqual(kwargs["cwd"], Path(temporary))
+                for forbidden in ("NODE_OPTIONS", "NODE_PATH", "PGPASSWORD", "COS_SECRET_KEY"):
+                    self.assertNotIn(forbidden, kwargs["env"])
+                result = descriptor if command[-1] == "describe" else {**status, "command": command[-1]}
+                return SimpleNamespace(returncode=0, stdout=json.dumps(result))
+            with patch.dict(os.environ, {"IMAGE_RELEASE_DATABASE_SMOKE": "1", "NODE_OPTIONS": "unsafe", "PGPASSWORD": "must-not-inherit", "COS_SECRET_KEY": "must-not-inherit"}), patch("smoke.subprocess.run", side_effect=run) as process:
+                self.assertEqual(verify_maintenance_runtime(Path(temporary), manifest), "passed")
+                self.assertEqual([call.args[0][-1] for call in process.call_args_list], ["describe", "preflight", "verify"])
+            with patch.dict(os.environ, {"IMAGE_RELEASE_DATABASE_SMOKE": "0"}), patch("smoke.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps({**descriptor, "connectionBudget": {**budget, "total": 21}}))):
+                with self.assertRaises(ReleaseError): verify_maintenance_runtime(Path(temporary), manifest)
+
+    def test_account_bundle_binds_database_access_protocol_and_complete_maintenance_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle, manifest, anchor = fixture_bundle(temporary, account=True)
+            self.assertEqual(manifest["schema"], 2)
+            self.assertEqual(manifest["databaseMode"], "postgresql")
+            self.assertEqual(manifest["assetAccessProtocol"], "account-private-v1")
+            validate_bundle(bundle, anchor, "v0.1.0", REV)
+            runtime = Path(temporary) / "runtime"
+            safe_extract_runtime(bundle / ARCHIVE, runtime, manifest)
+            metadata = json.loads((runtime / "release.json").read_text())
+            self.assertEqual(metadata["database"], manifest["database"])
+            self.assertTrue((runtime / "maintenance/cli.mjs").is_file())
+            for migration in manifest["database"]["migrations"]:
+                self.assertEqual(sha256_file(runtime / "maintenance/migrations" / migration["name"]), migration["sha256"])
+
+    def test_account_packaging_rejects_unreviewed_sql_missing_or_extra_files_and_linked_entry(self):
+        for mutation in ("source_sql", "built_sql", "catalog", "missing", "extra", "entry_link", "migration_link", "range"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                source = make_source(Path(temporary) / "source", account=True)
+                if mutation == "source_sql":
+                    with (source / "migrations/0001-accounts.sql").open("a") as output: output.write("\n-- changed")
+                elif mutation == "built_sql":
+                    with (source / ".next/maintenance/migrations/0001-accounts.sql").open("a") as output: output.write("\n-- changed")
+                elif mutation == "catalog":
+                    (source / "scripts/database/migration-catalog.ts").write_text("export const approvedMigrations = {}")
+                elif mutation == "missing":
+                    (source / ".next/maintenance/migrations/0001-accounts.sql").unlink()
+                elif mutation == "extra":
+                    (source / ".next/maintenance/unreviewed.mjs").write_text("unexpected")
+                elif mutation == "entry_link":
+                    (source / ".next/maintenance/cli.mjs").unlink()
+                    (source / ".next/maintenance/cli.mjs").symlink_to("../../standalone/server.js")
+                elif mutation == "migration_link":
+                    file = source / ".next/maintenance/migrations/0001-accounts.sql"
+                    file.unlink(); file.symlink_to(source / "migrations/0001-accounts.sql")
+                else:
+                    file = source / "deploy/release-policy.json"
+                    policy = json.loads(file.read_text()); policy["database"]["minVersion"] = "0001"
+                    file.write_text(json.dumps(policy))
+                with self.assertRaises(ReleaseError):
+                    package_bundle(source, Path(temporary) / "bundle", "v0.1.0", REV, verify_source=False)
+
     def test_standalone_assets_metadata_and_real_dependency_inventory(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = make_source(Path(temporary) / "source")

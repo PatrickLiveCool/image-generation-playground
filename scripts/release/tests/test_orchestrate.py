@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ARCHIVE, ReleaseError, json_bytes, release_prefix
 from cos import MARKER
 from orchestrate import (apply_retention, deliver, maintenance, read_release, resolve_rollback,
-                         retention_plan, success_marker, validate_receipt, SSHSession, quoted_ssh_config_path)
+                         retention_plan, success_marker, validate_receipt, verify_public, SSHSession, quoted_ssh_config_path)
 from test_package import REV, fixture_bundle
 from test_cos import FakeSDK, add_bundle, fake_store
 
@@ -58,6 +58,37 @@ class FakeSession:
 
 
 class OrchestrateTests(unittest.TestCase):
+    def test_account_delivery_requires_persistent_access_floor_and_verified_database_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, manifest, anchor = fixture_bundle(temporary, account=True)
+            value = receipt(manifest, anchor)
+            prefix = value['current']['prefix']
+            with self.assertRaisesRegex(ReleaseError, 'access floor and database ledger'):
+                validate_receipt(value, prefix, anchor, manifest)
+            value.update(assetAccessProtocol='account-private-v1', database={'after': {'compatible': True, 'version': '0004', 'pending': [], 'connectionBudget': 9, 'ledgerSha256': 'f' * 64}})
+            self.assertIn(prefix, validate_receipt(value, prefix, anchor, manifest))
+            value['database']['after']['pending'] = ['0004-private-workspace.sql']
+            with self.assertRaises(ReleaseError):
+                validate_receipt(value, prefix, anchor, manifest)
+
+    def test_public_account_metadata_must_match_the_database_and_private_access_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, manifest, _ = fixture_bundle(temporary, account=True)
+            class Response:
+                status = 200
+                def __init__(self, value): self.value = value
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+                def read(self, limit): return json_bytes(self.value)
+            health = {'application': 'qintopia-image', 'version': manifest['version'], 'revision': manifest['revision'], 'status': 'ready'}
+            version = {**health, 'managed': True, **{key: manifest[key] for key in ['browserWorkspaceSchema', 'assetCapabilityVersion', 'databaseMode', 'assetAccessProtocol', 'database']}}
+            with patch('orchestrate.urllib.request.urlopen', side_effect=[Response(health), Response(version)]):
+                verify_public(manifest)
+            version['assetAccessProtocol'] = 'legacy-demo'
+            with patch('orchestrate.urllib.request.urlopen', side_effect=[Response(health), Response(version)]):
+                with self.assertRaisesRegex(ReleaseError, 'account access metadata'):
+                    verify_public(manifest)
+
     def test_ssh_uses_one_config_quoted_known_hosts_path_without_relaxing_trust(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'Codex project with "quotes" and \\ slash'

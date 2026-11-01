@@ -88,6 +88,20 @@ printf 'authorizedkeysfile .ssh/authorized_keys\nforcecommand none\nclientalivei
         self.assertEqual(target.read_text(), 'existing operator tool\n')
         self.assertFalse(self.log.exists())
 
+    def test_identical_wrapper_with_nonexecutable_mode_is_rejected_without_repair(self):
+        target = self.fs / 'usr/local/sbin/qintopia-image-deploy'
+        target.parent.mkdir(parents=True)
+        shutil.copyfile(self.source / 'deploy/qintopia-image-deploy', target)
+        target.chmod(0o644)
+        self.stub('stat', '''if [ "$2" = '%u:%g' ]; then echo 0:0; else
+case "$4" in */usr/local/sbin/qintopia-image-deploy) echo 644;; *) echo 755;; esac
+fi''')
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('existing tool mode differs', result.stderr)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        self.assertFalse(self.log.exists())
+
     def test_forced_command_or_key_options_cannot_expand_access(self):
         self.stub('sshd', 'printf "authorizedkeysfile .ssh/authorized_keys\nforcecommand /bin/bash\n"')
         result = self.run_installer()

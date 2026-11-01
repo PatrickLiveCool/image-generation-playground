@@ -26,6 +26,9 @@ class ReleaseMetadataTests(unittest.TestCase):
             destination = self.source / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, destination)
+        (self.source / "scripts/database").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/database/migration-catalog.ts", self.source / "scripts/database/migration-catalog.ts")
+        shutil.copytree(ROOT / "migrations", self.source / "migrations")
         self.version = json.loads((self.source / "package.json").read_text())["version"]
         self.tag = "v" + self.version
 
@@ -94,6 +97,24 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_unknown_and_repeated_cli_arguments_are_rejected(self) -> None:
         for arguments in (("--skip-checks",), ("--tag",), ("--tag", self.tag, "--tag", self.tag)):
             self.assertNotEqual(self.run_check(*arguments).returncode, 0)
+
+    def test_unreviewed_or_incomplete_migrations_and_access_downgrade_are_rejected(self) -> None:
+        policy_file = self.source / "deploy/release-policy.json"
+        original = policy_file.read_text()
+        for change in ("digest", "order", "missing", "range", "project", "protocol", "legacy"):
+            policy = json.loads(original)
+            if change == "digest": policy["database"]["migrations"][0]["sha256"] = "0" * 64
+            elif change == "order": policy["database"]["migrations"].reverse()
+            elif change == "missing": policy["database"]["migrations"].pop()
+            elif change == "range": policy["database"]["minVersion"] = "0001"
+            elif change == "project": policy["database"]["name"] = "another_database"
+            elif change == "protocol": policy["assetAccessProtocol"] = "public-bearer"
+            else: policy["databaseMode"] = "none"
+            policy_file.write_text(json.dumps(policy))
+            self.assertNotEqual(self.run_check().returncode, 0, change)
+        policy_file.write_text(original)
+        with (self.source / "migrations/0001-accounts.sql").open("a") as output: output.write("\n-- modified after review")
+        self.assertNotEqual(self.run_check().returncode, 0)
 
 
 class WorkflowSafetyTests(unittest.TestCase):
