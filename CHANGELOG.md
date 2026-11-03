@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.2...v0.4.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **annotations:** 默认启用图片批注并移除登记流程 ([6d4cd10](https://github.com/PatrickLiveCool/image-generation-playground/commit/6d4cd106d2e28d29df81064f81f37e2c632477b6))
+* **annotations:** 默认启用图片批注并移除登记流程 ([a21099f](https://github.com/PatrickLiveCool/image-generation-playground/commit/a21099f1d495d6fc715ac79fca36a4707ac02f32))
+
 ## [0.4.2](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.1...v0.4.2) (2026-11-01)
 
 
