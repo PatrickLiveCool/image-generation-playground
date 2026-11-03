@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg"
-import { createHash, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import type { ModelMapping, ProviderApiMode, ProviderModel, ProviderSettings } from "./api-provider-types"
 import type { AdminProviderConfiguration, ProviderConfigurationInput, PublicModelCatalog } from "./provider-configuration-types"
 import { AccountError, invalidInput } from "./auth/errors"
@@ -12,9 +12,8 @@ import { MAX_PROVIDER_JSON_BYTES, validateProviderConfiguration, validateProvide
 export { MAX_PROVIDER_JSON_BYTES, validateProviderConfiguration } from "./provider-configuration-validation"
 import { aspectRatiosForModel } from "../components/image-combiner/model-catalog"
 import {
-  AnnotationCapabilityValidationError, publicAnnotationCapability, serializeAnnotationCapabilityBinding,
-  serializeAnnotationCapabilityEvidence, validateAnnotationCapabilities, validateRecordAnnotationCapabilityInput,
-  validateDisableAnnotationCapabilityInput,
+  AnnotationCapabilityValidationError, createDefaultAnnotationCapability, serializeAnnotationCapabilityBinding,
+  serializeAnnotationCapabilityEvidence, validateAnnotationCapabilities,
   type ResolvedAnnotationCapability, type StoredAnnotationCapability,
 } from "./annotation-capability"
 
@@ -28,8 +27,8 @@ function bindingSha256(settings: ProviderSettings, modelId: string): string {
     tokenSha256: sha256(`qintopia-image:annotation-token:v1\0${settings.apiKey}`) }))
 }
 
-/** A stale or changed binding is unavailable; malformed persisted evidence is a configuration failure. */
-function currentCapabilities(row: StoredConfiguration, token: string): StoredAnnotationCapability[] {
+/** Keep old administrator records readable without using them to gate new annotation requests. */
+function legacyCapabilities(row: StoredConfiguration, token: string): StoredAnnotationCapability[] {
   try {
     return validateAnnotationCapabilities(row.annotationCapabilities).filter(capability => {
       const mapping = row.mappings.find(item => item.id === capability.mappingId)
@@ -38,17 +37,14 @@ function currentCapabilities(row: StoredConfiguration, token: string): StoredAnn
         && capability.evidenceSha256 === sha256(serializeAnnotationCapabilityEvidence(capability))
     })
   } catch (error) {
-    if (error instanceof AnnotationCapabilityValidationError) throw new AccountError("PROVIDER_CAPABILITY_INVALID", 503, "批注能力记录无法核对，请联系管理员检查配置。")
+    if (error instanceof AnnotationCapabilityValidationError) throw new AccountError("PROVIDER_CAPABILITY_INVALID", 503, "历史批注记录无法核对，请联系管理员检查配置。")
     throw error
   }
 }
 
-function resolveAnnotationCapability(row: StoredConfiguration, mappingId: string, token: string): ResolvedAnnotationCapability | null {
-  const capability = currentCapabilities(row, token).find(item => item.mappingId === mappingId)
-  if (!capability) return null
-  const { expression, maxInputImages, configurationRevision, bindingSha256, evidenceSha256 } = capability
-  return { expression, maxInputImages, configurationRevision, bindingSha256, evidenceSha256,
-    sourceEvidence: { mappingId: capability.mappingId, evidence: { ...capability.evidence } } }
+function resolveAnnotationCapability(row: StoredConfiguration, mapping: ModelMapping, token: string): ResolvedAnnotationCapability {
+  return createDefaultAnnotationCapability(row.revision,
+    bindingSha256({ baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: token }, mapping.modelId), sha256)
 }
 
 async function storedConfiguration(client: Pick<PoolClient, "query">): Promise<StoredConfiguration | undefined> {
@@ -61,7 +57,7 @@ function safeView(row?: StoredConfiguration): AdminProviderConfiguration {
   providerConfigurationKey()
   if (!row) return { revision: 0, settings: { baseUrl: "", apiKey: "", apiMode: "images" }, secretConfigured: false, models: [], mappings: [], modelsSynced: false, annotationCapabilities: [] }
   const token = decryptProviderSecret(row.tokenCiphertext)
-  return { revision: row.revision, settings: { baseUrl: row.baseUrl, apiKey: "", apiMode: row.apiMode }, secretConfigured: true, models: row.models, mappings: row.mappings, modelsSynced: row.modelsSynced, annotationCapabilities: currentCapabilities(row, token) }
+  return { revision: row.revision, settings: { baseUrl: row.baseUrl, apiKey: "", apiMode: row.apiMode }, secretConfigured: true, models: row.models, mappings: row.mappings, modelsSynced: row.modelsSynced, annotationCapabilities: legacyCapabilities(row, token) }
 }
 
 function assertRevision(expected: number, row?: StoredConfiguration) {
@@ -94,7 +90,7 @@ export async function saveAdminProvider(headers: Headers, body: unknown): Promis
     const token = resolveDraftToken(input.settings, current)
     const tokenCiphertext = encryptProviderSecret(token)
     const nextRevision = input.revision + 1
-    const annotationCapabilities = current ? currentCapabilities(current, decryptProviderSecret(current.tokenCiphertext))
+    const annotationCapabilities = current ? legacyCapabilities(current, decryptProviderSecret(current.tokenCiphertext))
       .filter(capability => {
         const mapping = input.mappings.find(item => item.id === capability.mappingId)
         return mapping && capability.bindingSha256 === bindingSha256({ ...input.settings, apiKey: token }, mapping.modelId)
@@ -105,65 +101,6 @@ export async function saveAdminProvider(headers: Headers, body: unknown): Promis
        ON CONFLICT (singleton) DO UPDATE SET "baseUrl"=EXCLUDED."baseUrl","tokenCiphertext"=EXCLUDED."tokenCiphertext","apiMode"=EXCLUDED."apiMode",models=EXCLUDED.models,mappings=EXCLUDED.mappings,"modelsSynced"=EXCLUDED."modelsSynced",revision=EXCLUDED.revision,"updatedBy"=EXCLUDED."updatedBy","updatedAt"=now(),"annotationCapabilities"=EXCLUDED."annotationCapabilities"
        RETURNING ${columns}`,
       [input.settings.baseUrl, tokenCiphertext, input.settings.apiMode, JSON.stringify(input.models), JSON.stringify(input.mappings), input.modelsSynced, nextRevision, identity.user.id, JSON.stringify(annotationCapabilities)],
-    )
-    await client.query('INSERT INTO app.provider_config_audit ("actorId",revision,action) VALUES ($1,$2,$3)', [identity.user.id, nextRevision, "save"])
-    return safeView(saved)
-  })
-}
-
-/** Records an administrator's source-based input-contract check, without contacting a model. */
-export async function recordAdminAnnotationCapability(headers: Headers, body: unknown): Promise<AdminProviderConfiguration> {
-  const identity = await accountIdentity(headers, { admin: true })
-  let input
-  try { input = validateRecordAnnotationCapabilityInput(body) }
-  catch (error) { throw invalidInput(error instanceof AnnotationCapabilityValidationError ? error.message : "批注能力记录格式无效。") }
-  return withTransaction(async client => {
-    await recheckAccount(client, identity, { admin: true })
-    await client.query("SELECT pg_advisory_xact_lock($1)", [PROVIDER_LOCK])
-    const current = await storedConfiguration(client)
-    assertRevision(input.revision, current)
-    if (!current) throw invalidInput("请先保存 API 配置，再记录批注能力。")
-    const mapping = current.mappings.find(item => item.id === input.mappingId)
-    if (!mapping) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请刷新核对。")
-    const token = decryptProviderSecret(current.tokenCiphertext)
-    const nextRevision = current.revision + 1
-    const capability: StoredAnnotationCapability = {
-      mappingId: mapping.id, expression: "overlay-v1", maxInputImages: 2, configurationRevision: nextRevision,
-      bindingSha256: bindingSha256({ baseUrl: current.baseUrl, apiMode: current.apiMode, apiKey: token }, mapping.modelId),
-      evidenceSha256: "0".repeat(64), evidence: { id: randomUUID(), actorId: identity.user.id, recordedAt: new Date().toISOString(), reference: input.evidenceReference, note: input.evidenceNote, confirmed: true },
-    }
-    capability.evidenceSha256 = sha256(serializeAnnotationCapabilityEvidence(capability))
-    const capabilities = currentCapabilities(current, token).filter(item => item.mappingId !== mapping.id)
-      .map(item => ({ ...item, configurationRevision: nextRevision }))
-    capabilities.push(capability)
-    const { rows: [saved] } = await client.query<StoredConfiguration>(
-      `UPDATE app.provider_settings SET "annotationCapabilities"=$1::jsonb,revision=$2,"updatedBy"=$3,"updatedAt"=now() WHERE singleton=1 RETURNING ${columns}`,
-      [JSON.stringify(capabilities), nextRevision, identity.user.id],
-    )
-    await client.query('INSERT INTO app.provider_config_audit ("actorId",revision,action) VALUES ($1,$2,$3)', [identity.user.id, nextRevision, "save"])
-    return safeView(saved)
-  })
-}
-
-/** Stops new annotation submissions; saved generation snapshots are never rewritten. */
-export async function disableAdminAnnotationCapability(headers: Headers, body: unknown): Promise<AdminProviderConfiguration> {
-  const identity = await accountIdentity(headers, { admin: true })
-  let input
-  try { input = validateDisableAnnotationCapabilityInput(body) }
-  catch (error) { throw invalidInput(error instanceof AnnotationCapabilityValidationError ? error.message : "批注停用请求格式无效。") }
-  return withTransaction(async client => {
-    await recheckAccount(client, identity, { admin: true })
-    await client.query("SELECT pg_advisory_xact_lock($1)", [PROVIDER_LOCK])
-    const current = await storedConfiguration(client)
-    assertRevision(input.revision, current)
-    if (!current || !current.mappings.some(item => item.id === input.mappingId)) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请刷新核对。")
-    const capabilities = currentCapabilities(current, decryptProviderSecret(current.tokenCiphertext))
-    if (!capabilities.some(item => item.mappingId === input.mappingId)) throw new AccountError("ANNOTATION_CAPABILITY_UNAVAILABLE", 409, "当前模型的批注能力已不可用，请刷新核对。")
-    const nextRevision = current.revision + 1
-    const nextCapabilities = capabilities.filter(item => item.mappingId !== input.mappingId).map(item => ({ ...item, configurationRevision: nextRevision }))
-    const { rows: [saved] } = await client.query<StoredConfiguration>(
-      `UPDATE app.provider_settings SET "annotationCapabilities"=$1::jsonb,revision=$2,"updatedBy"=$3,"updatedAt"=now() WHERE singleton=1 RETURNING ${columns}`,
-      [JSON.stringify(nextCapabilities), nextRevision, identity.user.id],
     )
     await client.query('INSERT INTO app.provider_config_audit ("actorId",revision,action) VALUES ($1,$2,$3)', [identity.user.id, nextRevision, "save"])
     return safeView(saved)
@@ -207,16 +144,12 @@ export async function syncAdminProvider(headers: Headers, body: unknown, signal?
 export async function readPublicModelCatalog(headers: Headers): Promise<PublicModelCatalog> {
   await requireAccount(headers)
   const view = safeView(await storedConfiguration(await getDatabase()))
-  return { revision: view.revision, configured: view.secretConfigured && view.mappings.length > 0, apiMode: view.settings.apiMode, mappings: view.mappings.map(mapping => {
-    const capability = view.annotationCapabilities.find(item => item.mappingId === mapping.id)
-    return { id: mapping.id, name: mapping.name, aspectRatios: [...aspectRatiosForModel(mapping.modelId)], annotation: publicAnnotationCapability(capability ? {
-      expression: capability.expression, maxInputImages: capability.maxInputImages, configurationRevision: capability.configurationRevision,
-      bindingSha256: capability.bindingSha256, evidenceSha256: capability.evidenceSha256,
-    } : null) }
-  }) }
+  return { revision: view.revision, configured: view.secretConfigured && view.mappings.length > 0, apiMode: view.settings.apiMode,
+    mappings: view.mappings.map(mapping => ({ id: mapping.id, name: mapping.name, aspectRatios: [...aspectRatiosForModel(mapping.modelId)],
+      annotation: { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null } })) }
 }
 
-export async function resolveGenerationProvider(headers: Headers, mappingId: string): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number; annotationCapability: ResolvedAnnotationCapability | null }> {
+export async function resolveGenerationProvider(headers: Headers, mappingId: string): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number; annotationCapability: ResolvedAnnotationCapability }> {
   await requireAccount(headers)
   if (typeof mappingId !== "string" || !mappingId || mappingId.length > 128) throw invalidInput("请重新选择模型。")
   const row = await storedConfiguration(await getDatabase())
@@ -224,11 +157,11 @@ export async function resolveGenerationProvider(headers: Headers, mappingId: str
   const mapping = row.mappings.find(item => item.id === mappingId)
   if (!mapping) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请重新选择。")
   const token = decryptProviderSecret(row.tokenCiphertext)
-  return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: token }, mapping, revision: row.revision, annotationCapability: resolveAnnotationCapability(row, mappingId, token) }
+  return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: token }, mapping, revision: row.revision, annotationCapability: resolveAnnotationCapability(row, mapping, token) }
 }
 
 /** 在任务受理事务内固定配置；调用方必须已复核身份，且只对新请求调用。 */
-export async function resolveGenerationProviderInTransaction(client: PoolClient, mappingId: string, expectedRevision: number): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number; annotationCapability: ResolvedAnnotationCapability | null }> {
+export async function resolveGenerationProviderInTransaction(client: PoolClient, mappingId: string, expectedRevision: number): Promise<{ settings: ProviderSettings; mapping: ModelMapping; revision: number; annotationCapability: ResolvedAnnotationCapability }> {
   if (typeof mappingId !== "string" || !mappingId || mappingId.length > 128) throw invalidInput("请重新选择模型。")
   validateProviderRevision(expectedRevision)
   // 与管理员更新行互斥，直到任务和配置快照一并提交；Token 仅返回给首次执行者。
@@ -238,5 +171,5 @@ export async function resolveGenerationProviderInTransaction(client: PoolClient,
   const mapping = row.mappings.find(item => item.id === mappingId)
   if (!mapping) throw new AccountError("MODEL_MAPPING_NOT_FOUND", 409, "所选模型已被移除，请重新选择。")
   const token = decryptProviderSecret(row.tokenCiphertext)
-  return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: token }, mapping, revision: row.revision, annotationCapability: resolveAnnotationCapability(row, mappingId, token) }
+  return { settings: { baseUrl: row.baseUrl, apiMode: row.apiMode, apiKey: token }, mapping, revision: row.revision, annotationCapability: resolveAnnotationCapability(row, mapping, token) }
 }

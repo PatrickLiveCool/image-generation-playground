@@ -2,7 +2,7 @@ import type { ProviderApiMode, ProviderModel } from "@/lib/api-provider-types"
 import type { AdminProviderConfiguration, ProviderConfigurationInput, PublicModelCatalog } from "@/lib/provider-configuration-types"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "@/lib/account-client"
 import { ALL_ASPECT_RATIO_VALUES } from "@/components/image-combiner/model-catalog"
-import { validateAnnotationCapabilities, validatePublicAnnotationCapability, type DisableAnnotationCapabilityInput, type PublicAnnotationCapability, type RecordAnnotationCapabilityInput } from "@/lib/annotation-capability"
+import { validateAnnotationCapabilities, validatePublicAnnotationCapability, type PublicAnnotationCapability } from "@/lib/annotation-capability"
 
 export class ProviderConfigurationError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -116,14 +116,6 @@ export async function readAdminProviderConfiguration(signal?: AbortSignal): Prom
 
 export async function saveAdminProviderConfiguration(input: ProviderConfigurationInput): Promise<AdminProviderConfiguration> {
   return readAdmin(await request("/api/admin/provider", { method: "PUT", body: JSON.stringify(input) }))
-}
-
-export async function recordProviderAnnotationCapability(input: RecordAnnotationCapabilityInput): Promise<AdminProviderConfiguration> {
-  return readAdmin(await request("/api/admin/provider/annotation-capabilities", { method: "POST", body: JSON.stringify(input) }))
-}
-
-export async function disableProviderAnnotationCapability(input: DisableAnnotationCapabilityInput): Promise<AdminProviderConfiguration> {
-  return readAdmin(await request("/api/admin/provider/annotation-capabilities", { method: "DELETE", body: JSON.stringify(input) }))
 }
 
 export async function syncProviderModels(input: { revision: number; baseUrl: string; apiKey: string; apiMode: ProviderApiMode }, signal?: AbortSignal): Promise<ProviderModel[]> {

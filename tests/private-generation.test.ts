@@ -12,7 +12,7 @@ import type { PrivateRunStatus } from "../lib/private-workspace-types"
 import type { ImageBytes } from "../lib/relay-image"
 import { composeAnnotatedPrompt } from "../lib/image-annotations"
 import { validateAnnotationExecution } from "../lib/annotation-execution"
-import { serializeResolvedAnnotationCapabilityEvidence } from "../lib/annotation-capability"
+import { createDefaultAnnotationCapability, serializeResolvedAnnotationCapabilityEvidence } from "../lib/annotation-capability"
 import { ProviderError } from "../lib/provider-network"
 
 const ownerId = "32345678-1234-4123-8123-123456789abc"
@@ -535,6 +535,19 @@ function freezeSourceEvidence(f: ReturnType<typeof fixture>) {
   capability.sourceEvidence = { mappingId: f.record.public.mappingId, evidence: { id: "11111111-1111-4111-8111-111111111111", actorId: "synthetic-admin", recordedAt: "2026-10-30T00:00:00.000Z", reference: "https://synthetic.example/original-evidence", note: "受理时核对的完整资料证据", confirmed: true } }
   capability.evidenceSha256 = bytesHash(serializeResolvedAnnotationCapabilityEvidence(capability)!)
 }
+
+test("默认批注策略直接提交并补保存，不创建管理员核验证据或重复调用模型", async () => {
+  const f = fixture({ annotation: true })
+  const existing = f.state.record.provider.annotationCapability!
+  const automatic = createDefaultAnnotationCapability(existing.configurationRevision, existing.bindingSha256, bytesHash)
+  f.state.record.provider.annotationCapability = automatic
+  f.state.completeFailures = 1
+  assert.equal((await executePrivateGeneration(identity, f.input, undefined, f.deps)).status, "save_pending")
+  assert.deepEqual(f.state.record.annotationExecution!.capability, automatic)
+  assert.equal(Object.hasOwn(f.readManifest().annotationExecution!.capability, "sourceEvidence"), false)
+  assert.equal((await repairPrivateGeneration(identity, runId, f.deps)).status, "complete")
+  assert.equal(f.counts.generate, 1)
+})
 
 test("批注来源冻结至任务与清单，旧五字段继续兼容，公开结果不含证据", async () => {
   const f = fixture({ annotation: true })

@@ -9,12 +9,12 @@ import { accountIdentity } from "../lib/auth/guards"
 import { closeDatabase, getDatabase } from "../lib/database"
 import { serializeAnnotationSnapshot, type AnnotationSnapshot } from "../lib/image-annotations"
 import { validateAnnotationExecution } from "../lib/annotation-execution"
-import { serializeResolvedAnnotationCapabilityEvidence, validateResolvedAnnotationCapability } from "../lib/annotation-capability"
+import { validateResolvedAnnotationCapability } from "../lib/annotation-capability"
 import { assertPrivateKey, type PrivateCosStore } from "../lib/private-cos"
 import { executePrivateGeneration, repairPrivateGeneration, type PrivateGenerationDependencies } from "../lib/private-generation"
 import { bytesHash, parsePrivateGenerationForm } from "../lib/private-generation-input"
 import * as workspace from "../lib/private-workspace-service"
-import { disableAdminAnnotationCapability, recordAdminAnnotationCapability, saveAdminProvider } from "../lib/provider-configuration"
+import { readPublicModelCatalog, resolveGenerationProvider, saveAdminProvider } from "../lib/provider-configuration"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
 
 // Only the main agent runs this file serially against the approved synthetic database.
@@ -96,12 +96,14 @@ test("专用PG批注：能力固定、双输入冻结、幂等、隔离和篡改
     image: { assetId: base.imageUrl!.split("/").pop()!, width: 80, height: 60, orientation: 1, pages: 1 },
     marks: [{ id: randomUUID(), number: 7, instruction: "改为绿色", geometry: { type: "rectangle", x: 2, y: 2, width: 20, height: 10 } }],
   }
-  await t.test("未知能力拒绝且不调用模型；当前账号不能引用他人基准", async () => {
-    await assert.rejects(executePrivateGeneration(user, await parsePrivateGenerationForm(form(snapshot)), undefined, dependencies), code("ANNOTATION_CAPABILITY_UNAVAILABLE"))
+  await t.test("保存配置后默认提供批注，不创建人工证据；当前账号不能引用他人基准", async () => {
+    const catalog = await readPublicModelCatalog(userHeaders)
+    assert.equal(catalog.mappings[0].annotation.available, true)
+    const { rows: [configured] } = await pool.query('SELECT "annotationCapabilities" FROM app.provider_settings')
+    assert.deepEqual(configured.annotationCapabilities, [])
     assert.equal(calls, 1)
     await assert.rejects(workspace.readPrivateAsset(admin, snapshot.image.assetId, "image"), code("NOT_FOUND"))
   })
-  await recordAdminAnnotationCapability(adminHeaders, { revision, mappingId: "mapping-a", evidenceReference: "https://synthetic.example/evidence", evidenceNote: "仅模拟传递验收，不证明实际模型效果", confirmed: true }); revision++
   await t.test("归档后冻结、保存失败、Token换绑后重复受理和补保存沿用原能力", async () => {
     const input = await parsePrivateGenerationForm(form(snapshot))
     failCompletion = true
@@ -111,13 +113,9 @@ test("专用PG批注：能力固定、双输入冻结、幂等、隔离和篡改
     assert.deepEqual(record.public.annotationSnapshot, snapshot)
     assert.equal(record.annotationExecution!.capability.configurationRevision, revision)
     const frozenCapability = structuredClone(record.provider.annotationCapability!)
-    assert.equal(frozenCapability.sourceEvidence!.mappingId, "mapping-a")
-    assert.equal(frozenCapability.sourceEvidence!.evidence.note, "仅模拟传递验收，不证明实际模型效果")
-    assert.equal(bytesHash(serializeResolvedAnnotationCapabilityEvidence(frozenCapability)!), frozenCapability.evidenceSha256)
+    assert.equal(Object.hasOwn(frozenCapability, "sourceEvidence"), false)
     assert.equal(record.annotationExecution!.snapshotSha256, bytesHash(serializeAnnotationSnapshot(snapshot)))
     const count = calls
-    await recordAdminAnnotationCapability(adminHeaders, { revision, mappingId: "mapping-a", evidenceReference: "https://synthetic.example/re-recorded", evidenceNote: "同连接重录资料", confirmed: true }); revision++
-    assert.deepEqual((await workspace.readPrivateRun(user, pending.id)).provider.annotationCapability, frozenCapability)
     await saveAdminProvider(adminHeaders, config(revision, "synthetic-token-2")); revision++
     assert.deepEqual((await workspace.readPrivateRun(user, pending.id)).provider.annotationCapability, frozenCapability)
     assert.equal((await executePrivateGeneration(user, input, undefined, dependencies)).status, "save_pending")
@@ -126,9 +124,11 @@ test("专用PG批注：能力固定、双输入冻结、幂等、隔离和篡改
     assert.deepEqual((await workspace.readPrivateCreation(userHeaders, creationId)).versions.find(run => run.id === repaired.id)!.annotationSnapshot, snapshot)
     assert.equal(calls, count)
     await assert.rejects(workspace.freezePrivateAnnotationExecution(user.user.id, pending.id, record.annotationExecution!), code("ANNOTATION_EXECUTION_CONFLICT"))
-    await assert.rejects(executePrivateGeneration(user, await parsePrivateGenerationForm(form(snapshot)), undefined, dependencies), code("ANNOTATION_CAPABILITY_UNAVAILABLE"))
+    const nextProvider = await resolveGenerationProvider(userHeaders, "mapping-a")
+    assert.ok(nextProvider.annotationCapability)
+    assert.notEqual(nextProvider.annotationCapability.bindingSha256, frozenCapability.bindingSha256)
+    assert.equal((await readPublicModelCatalog(userHeaders)).mappings[0].annotation.available, true)
   })
-  await recordAdminAnnotationCapability(adminHeaders, { revision, mappingId: "mapping-a", evidenceReference: "https://synthetic.example/evidence-2", evidenceNote: "换绑后的合成证据", confirmed: true }); revision++
   await t.test("同请求并发只受理一次，已冻结值拒绝重复和不同绑定", async () => {
     const input = await parsePrivateGenerationForm(form(snapshot))
     const accepts = await Promise.all(Array.from({ length: 12 }, () => workspace.acceptPrivateRun(user, input.command)))
@@ -164,15 +164,15 @@ test("专用PG批注：能力固定、双输入冻结、幂等、隔离和篡改
     assert.equal(calls, count)
   })
 
-  await t.test("停用后拒绝新批注、普通生成可用，既有任务携完整证据完成补保存", async () => {
+  await t.test("配置更新后批注继续可用，既有任务沿用冻结输入完成补保存", async () => {
     failCompletion = true
     const input = await parsePrivateGenerationForm(form(snapshot))
     const pending = await executePrivateGeneration(user, input, undefined, dependencies)
     assert.equal(pending.status, "save_pending")
     const before = await workspace.readPrivateRun(user, pending.id), frozen = structuredClone(before.provider.annotationCapability!)
     const modelCalls = calls
-    await disableAdminAnnotationCapability(adminHeaders, { revision, mappingId: "mapping-a" }); revision++
-    await assert.rejects(executePrivateGeneration(user, await parsePrivateGenerationForm(form(snapshot)), undefined, dependencies), code("ANNOTATION_CAPABILITY_UNAVAILABLE"))
+    await saveAdminProvider(adminHeaders, config(revision, "synthetic-token-3")); revision++
+    assert.equal((await readPublicModelCatalog(userHeaders)).mappings[0].annotation.available, true)
     assert.equal(calls, modelCalls)
     assert.equal((await executePrivateGeneration(user, input, undefined, dependencies)).status, "save_pending")
     const after = await workspace.readPrivateRun(user, pending.id)
@@ -182,8 +182,11 @@ test("专用PG批注：能力固定、双输入冻结、幂等、隔离和篡改
     assert.equal(repaired.status, "complete")
     assert.doesNotMatch(JSON.stringify(repaired), /sourceEvidence|actorId|evidenceSha256|synthetic\.example\/evidence/)
     assert.equal(calls, modelCalls)
+    const nextAnnotation = await executePrivateGeneration(user, await parsePrivateGenerationForm(form(snapshot)), undefined, dependencies)
+    assert.equal(nextAnnotation.status, "complete")
+    assert.equal(calls, modelCalls + 1)
     const ordinary = await executePrivateGeneration(user, await parsePrivateGenerationForm(form()), undefined, dependencies)
     assert.equal(ordinary.status, "complete")
-    assert.equal(calls, modelCalls + 1)
+    assert.equal(calls, modelCalls + 2)
   })
 })

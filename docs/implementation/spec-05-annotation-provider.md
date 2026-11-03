@@ -7,6 +7,8 @@ context:
   - docs/implementation/spec-05-image-annotations.md
   - docs/implementation/spec-05-annotation-contract.md
 ---
+> 2026-11-03 更新：人工能力登记/停用门禁已由用户确认的[批注默认可用规格](spec-07-default-annotations.md)取代。下文保留原阶段实施与验收记录；历史证据和任务仍兼容读取。
+
 
 ## Intent
 

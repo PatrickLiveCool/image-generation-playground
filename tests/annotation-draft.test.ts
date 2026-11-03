@@ -40,7 +40,7 @@ test("object-contain uses the actual letterboxed image and all eight orientation
   }
 })
 
-test("empty overall prompt freezes only the current base and rejects occupied inputs or unknown model capability", () => {
+test("empty overall prompt freezes the current base, ignores retired capability flags and rejects occupied inputs", () => {
   const creation = workspace().creations[0]
   const built = buildCreationRequest({ creation, catalog })
   assert.equal(built.formData.get("prompt"), "")
@@ -49,7 +49,8 @@ test("empty overall prompt freezes only the current base and rejects occupied in
   creation.draft.annotationDrafts![v1].snapshot.marks[0].instruction = "后续编辑"
   assert.equal(built.generation.annotationSnapshot!.marks[0].instruction, "把区域改为红色")
   for (const patch of [{ image1Url: "https://example.test/ref.png", useUrls: true }, { documentFile: new File(["text"], "brief.txt"), documentImageInspection: "unknown" as const }]) assert.throws(() => buildCreationRequest({ creation: { ...creation, draft: { ...creation.draft, ...patch } }, catalog }), /参考图|纯 TXT/)
-  assert.throws(() => buildCreationRequest({ creation, catalog: { ...catalog, mappings: [{ ...catalog.mappings[0], annotation: { ...catalog.mappings[0].annotation, available: false, expression: null, reason: "未确认能力" } }] } }), /未确认能力/)
+  const legacyCatalog = { ...catalog, mappings: [{ ...catalog.mappings[0], annotation: { ...catalog.mappings[0].annotation, available: false, expression: null, reason: "未确认能力" } }] }
+  assert.ok(buildCreationRequest({ creation, catalog: legacyCatalog }).formData.has("annotationSnapshot"))
   const withText = { ...creation, draft: { ...creation.draft, documentFile: new File(["text"], "brief.txt"), documentImageInspection: "none" as const } }
   assert.ok(buildCreationRequest({ creation: withText, catalog }).formData.has("document"))
 })

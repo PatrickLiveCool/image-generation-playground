@@ -66,7 +66,6 @@ export function buildCreationRequest({ creation, catalog, generationId = crypto.
   const references = draft.useUrls ? urls : files
   if (annotationSnapshot) {
     if (!base || annotationSnapshot.baseVersionId !== base.id || base.imageUrl !== `/api/images/${annotationSnapshot.image.assetId}`) throw new Error("批注基准与当前图片不匹配，请重新选择基础版本。")
-    if (!mapping.annotation?.available || mapping.annotation.expression !== "overlay-v1") throw new Error(mapping.annotation?.reason || "当前模型尚未确认支持区域批注，请更换模型或联系管理员记录能力。")
     if (references.length) throw new Error("区域批注已使用原图与标注图两个输入，请移除补充参考图后提交。")
     if ((draft.documentFile || documentText.trim()) && draft.documentImageInspection !== "none") throw new Error("区域批注仅支持已确认无图片的文档，请改用纯 TXT 或移除文档。")
   }

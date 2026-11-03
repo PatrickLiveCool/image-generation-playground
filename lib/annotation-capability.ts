@@ -1,11 +1,13 @@
 /** Shared shape validation only: safe to include in browser and maintenance bundles. */
 export type ResolvedAnnotationCapability = {
   expression: "overlay-v1"
+  /** Legacy field name: the original/overlay pair, not the provider image limit. */
   maxInputImages: 2
   configurationRevision: number
   bindingSha256: string
+  /** Legacy field name; default runs store the built-in input-policy digest here. */
   evidenceSha256: string
-  /** New runs keep their source independently of the mutable administrator configuration. */
+  /** Historical administrator evidence, retained only on previously admitted runs. */
   sourceEvidence?: { mappingId: string; evidence: AnnotationEvidence }
 }
 
@@ -26,18 +28,11 @@ export type StoredAnnotationCapability = Omit<ResolvedAnnotationCapability, "sou
 export type PublicAnnotationCapability = {
   available: boolean
   expression: "overlay-v1" | null
+  /** Retained wire field for old clients; describes the annotation pair, not provider capacity. */
   maxInputImages: 2
   reason: string | null
 }
 
-export type RecordAnnotationCapabilityInput = {
-  revision: number
-  mappingId: string
-  evidenceReference: string
-  evidenceNote: string
-  confirmed: true
-}
-export type DisableAnnotationCapabilityInput = { revision: number; mappingId: string }
 export type AnnotationCapabilityVerification = {
   sha256: (value: string) => string
   mappingId?: string
@@ -129,7 +124,7 @@ function serializeSourceEvidence(bindingSha256: string, source: NonNullable<Reso
   return JSON.stringify({ schema: 1, mappingId: source.mappingId, bindingSha256, evidence: source.evidence })
 }
 
-/** Null denotes the original five-field snapshot, whose source was not frozen. */
+/** Null denotes a five-field snapshot: an application-default run or a legacy run without frozen evidence. */
 export function serializeResolvedAnnotationCapabilityEvidence(value: ResolvedAnnotationCapability): string | null {
   const capability = validateResolvedAnnotationCapability(value)
   return capability.sourceEvidence ? serializeSourceEvidence(capability.bindingSha256, capability.sourceEvidence) : null
@@ -140,16 +135,16 @@ export function serializeAnnotationCapabilityBinding(value: { baseUrl: string; a
   return JSON.stringify({ schema: 1, baseUrl: text(value.baseUrl, 2048), apiMode: value.apiMode, modelId: text(value.modelId, 256), tokenSha256: sha256(value.tokenSha256) })
 }
 
-export function validateRecordAnnotationCapabilityInput(value: unknown): RecordAnnotationCapabilityInput {
-  const input = object(value, ["revision", "mappingId", "evidenceReference", "evidenceNote", "confirmed"])
-  if (input.confirmed !== true || input.revision === 2_147_483_647) throw new AnnotationCapabilityValidationError("请确认已核对当前连接和模型支持原图与编号标注图两张输入。")
-  return { revision: revision(input.revision), mappingId: text(input.mappingId, 128), evidenceReference: reference(input.evidenceReference), evidenceNote: text(input.evidenceNote, 2000, true), confirmed: true }
+/** Fixed application behavior, not an assertion of provider support or administrator verification. */
+export function serializeDefaultAnnotationPolicy(bindingSha256: string): string {
+  return JSON.stringify({ schema: 1, source: "application-default", expression: "overlay-v1",
+    inputs: ["original", "overlay"], bindingSha256: sha256(bindingSha256) })
 }
 
-export function validateDisableAnnotationCapabilityInput(value: unknown): DisableAnnotationCapabilityInput {
-  const input = object(value, ["revision", "mappingId"])
-  if (input.revision === 2_147_483_647) throw new AnnotationCapabilityValidationError()
-  return { revision: revision(input.revision), mappingId: text(input.mappingId, 128) }
+/** Preserve the existing five-field snapshot so earlier readers and backups remain compatible. */
+export function createDefaultAnnotationCapability(configurationRevision: number, bindingSha256: string, hash: (value: string) => string): ResolvedAnnotationCapability {
+  return validateResolvedAnnotationCapability({ expression: "overlay-v1", maxInputImages: 2,
+    configurationRevision, bindingSha256, evidenceSha256: hash(serializeDefaultAnnotationPolicy(bindingSha256)) })
 }
 
 export function validatePublicAnnotationCapability(value: unknown): PublicAnnotationCapability {
@@ -162,5 +157,5 @@ export function validatePublicAnnotationCapability(value: unknown): PublicAnnota
 
 export function publicAnnotationCapability(capability: ResolvedAnnotationCapability | null): PublicAnnotationCapability {
   if (capability) { validateResolvedAnnotationCapability(capability); return { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null } }
-  return { available: false, expression: null, maxInputImages: 2, reason: "管理员尚未记录当前模型的双图批注输入能力，请先完成资料核验。" }
+  return { available: false, expression: null, maxInputImages: 2, reason: "当前模型配置不可用，请刷新模型列表。" }
 }

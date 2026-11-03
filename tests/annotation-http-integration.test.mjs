@@ -139,15 +139,17 @@ test('built annotation HTTP uses real account/PG with synthetic model and memory
       {id:randomUUID(),number:3,instruction:'调整圈选区域',geometry:{type:'lasso',points:[{x:150,y:80},{x:230,y:85},{x:180,y:150}]}},
       {id:randomUUID(),number:8,instruction:'调整涂抹区域',geometry:{type:'brush',points:[{x:30,y:180},{x:80,y:190}],brushWidth:14}},
     ]}
-    function annotation(revision='2') {
+    function annotation(revision='1') {
       const edit = generation(creationId,firstRun.id)
       edit.data.set('configRevision',revision); edit.data.set('prompt',''); edit.data.set('annotationSnapshot',JSON.stringify(snapshot))
       return edit
     }
-    assert.equal((await request('/api/generate-image',{session:user,form:annotation('1').data})).status,409)
+    const catalog = await json('/api/models',{session:user})
+    assert.equal(catalog.revision,1)
+    assert.equal(catalog.mappings[0].annotation.available,true)
+    const configured = await json('/api/admin/provider',{session:admin})
+    assert.deepEqual(configured.annotationCapabilities,[],'Default annotation must not fabricate administrator evidence')
     assert.equal((await json('/__synthetic_acceptance__/state')).modelCalls,1)
-    const configured = await json('/api/admin/provider/annotation-capabilities',{session:admin,body:{revision:1,mappingId:'synthetic-mapping',evidenceReference:'https://synthetic.example/annotation-evidence',evidenceNote:'本测试只验证合成双输入传递',confirmed:true}})
-    assert.equal(configured.revision,2)
     for (const mutate of [
       data=>data.set('image1Url','https://public.example/reference.png'),
       data=>{const wrong=structuredClone(snapshot);wrong.image.width++;data.set('annotationSnapshot',JSON.stringify(wrong))},
@@ -196,7 +198,7 @@ test('built annotation HTTP uses real account/PG with synthetic model and memory
     assert.equal(Object.hasOwn(await denied.json(),'width'),false)
     // Ordinary document generation still extracts and forwards the first usable PDF image.
     const documentGeneration = generation(randomUUID())
-    documentGeneration.data.set('configRevision','2')
+    documentGeneration.data.set('configRevision','1')
     documentGeneration.data.set('document',new File([new Uint8Array(syntheticPdf({image:true,imageSize:128}))],'illustrated.pdf',{type:'application/pdf'}))
     const documentRun = (await json('/api/generate-image',{session:admin,form:documentGeneration.data})).run
     assert.equal(documentRun.status,'complete')

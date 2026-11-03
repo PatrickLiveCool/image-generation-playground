@@ -165,7 +165,8 @@ test("the actual editor retries metadata and submits an annotation-only edit wit
   let metadataReads = 0, submitted: FormData | undefined
   const submittedForm = () => submitted!
   t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
-    if (path === "/api/models") return Response.json({ ...catalog, mappings: [{ ...catalog.mappings[0], annotation: { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null } }] })
+    // An older catalog's manual-capability flag must not add a separate activation step.
+    if (path === "/api/models") return Response.json(catalog)
     const common = baseFetch(path); if (common) return common
     if (path === "/api/creations") return Response.json({ creations: [remote()] })
     if (path === `${asset}/metadata`) { metadataReads++; return metadataReads === 1 ? Response.json({ error: { message: "读取暂时失败" } }, { status: 503 }) : Response.json(imageMetadata) }

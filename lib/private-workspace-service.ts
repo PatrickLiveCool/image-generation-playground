@@ -169,7 +169,6 @@ export async function acceptPrivateRun(identity: AccountIdentity, command: RunCo
       if (input.annotationSnapshot && base.id !== input.annotationSnapshot.image.assetId) throw invalidInput("批注图片与所选基准版本不一致。")
     }
     const provider = await resolveGenerationProviderInTransaction(client, input.mappingId, input.configRevision)
-    if (input.annotationSnapshot && !provider.annotationCapability) throw new AccountError("ANNOTATION_CAPABILITY_UNAVAILABLE", 409, "当前模型尚未确认支持原图和批注图两张输入，请选择支持批注的模型。")
     if (!aspectRatiosForModel(provider.mapping.modelId).includes(input.aspectRatio)) throw invalidInput("所选模型不支持该图片比例。")
     const slot = await acquireGenerationSlotInTransaction(client, { userId: ownerId, requestId: input.clientRequestId, fingerprint: input.fingerprint })
     if (!slot.acquired) throw new AccountError("GENERATION_REQUEST_CONFLICT", 409, "该请求已受理，请查询原任务状态。")
