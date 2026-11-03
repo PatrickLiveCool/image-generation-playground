@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createCipheriv, createHash, randomBytes } from "node:crypto"
 import { test } from "node:test"
 import { readDatabaseConfiguration } from "../lib/database-target"
-import { serializeAnnotationCapabilityBinding, serializeAnnotationCapabilityEvidence, type StoredAnnotationCapability } from "../lib/annotation-capability"
+import { createDefaultAnnotationCapability, serializeAnnotationCapabilityBinding, serializeAnnotationCapabilityEvidence, type StoredAnnotationCapability } from "../lib/annotation-capability"
 import { validateAnnotationExecution } from "../lib/annotation-execution"
 import { serializeAnnotationSnapshot, validateAnnotationSnapshot } from "../lib/image-annotations"
 import { encryptProviderSecret } from "../lib/provider-secret"
@@ -94,6 +94,26 @@ test("既有能力证据的记录者降为user后仍可备份，原能力和证�
   assert.equal(restored.tables.user.find(user => user.id === admin)!.role, "user")
   assert.deepEqual(restored.tables.provider_settings[0].annotationCapabilities, capabilities)
   assert.deepEqual(restored.tables.generation_runs, original.tables.generation_runs)
+})
+
+test("默认批注快照与历史管理员记录共存，备份恢复不生成或改写人工证据", () => {
+  const original = fixture()
+  const historical = structuredClone(original.tables.provider_settings[0].annotationCapabilities)
+  const run = original.tables.generation_runs[1]
+  const previous = run.providerAnnotationCapability as { configurationRevision: number; bindingSha256: string }
+  const automatic = createDefaultAnnotationCapability(previous.configurationRevision, previous.bindingSha256, sha)
+  run.providerAnnotationCapability = automatic
+  ;(run.annotationExecution as { capability: unknown }).capability = structuredClone(automatic)
+  const restored = decodeProjectBackup(encodeProjectBackup(resigned(original), key), key)
+  assert.deepEqual(restored.tables.provider_settings[0].annotationCapabilities, historical)
+  assert.deepEqual(restored.tables.generation_runs[1].providerAnnotationCapability, automatic)
+  assert.equal(Object.hasOwn(automatic, "sourceEvidence"), false)
+  const noLegacy = structuredClone(original)
+  noLegacy.tables.provider_settings[0].annotationCapabilities = []
+  assert.deepEqual(decodeProjectBackup(encodeProjectBackup(resigned(noLegacy), key), key), resigned(noLegacy))
+  const mismatched = structuredClone(original)
+  ;(mismatched.tables.generation_runs[1].annotationExecution as { capability: { bindingSha256: string } }).capability.bindingSha256 = "d".repeat(64)
+  assert.throws(() => encodeProjectBackup(resigned(mismatched), key), ProjectBackupError)
 })
 
 test("准备中、失败和恢复后的unknown允许未冻结execution；已调用模型阶段必须冻结", () => {

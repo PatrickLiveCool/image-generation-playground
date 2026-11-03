@@ -1,19 +1,14 @@
 import { assertSameOrigin, accountErrorResponse, requireAccount } from "@/lib/auth/guards"
-import { readJson } from "@/lib/auth/validation"
-import { disableAdminAnnotationCapability, recordAdminAnnotationCapability } from "@/lib/provider-configuration"
+import { AccountError } from "@/lib/auth/errors"
 
-export async function POST(request: Request) {
+/** Old cached admin pages must not mutate the retired capability setting. */
+async function retired(request: Request) {
   try {
     assertSameOrigin(request)
     await requireAccount(request.headers, { admin: true })
-    return Response.json(await recordAdminAnnotationCapability(request.headers, await readJson(request)), { headers: { "Cache-Control": "no-store" } })
+    throw new AccountError("ANNOTATION_CONFIGURATION_RETIRED", 410, "批注已默认可用，无需单独启用或停用。请刷新页面。")
   } catch (error) { return accountErrorResponse(error) }
 }
 
-export async function DELETE(request: Request) {
-  try {
-    assertSameOrigin(request)
-    await requireAccount(request.headers, { admin: true })
-    return Response.json(await disableAdminAnnotationCapability(request.headers, await readJson(request)), { headers: { "Cache-Control": "no-store" } })
-  } catch (error) { return accountErrorResponse(error) }
-}
+export async function POST(request: Request) { return retired(request) }
+export async function DELETE(request: Request) { return retired(request) }

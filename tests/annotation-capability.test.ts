@@ -5,8 +5,7 @@ import type { PoolClient } from "pg"
 import {
   AnnotationCapabilityValidationError, publicAnnotationCapability, serializeAnnotationCapabilityBinding,
   serializeAnnotationCapabilityEvidence, serializeResolvedAnnotationCapabilityEvidence, validateAnnotationCapabilities, validatePublicAnnotationCapability,
-  validateDisableAnnotationCapabilityInput,
-  validateRecordAnnotationCapabilityInput, validateResolvedAnnotationCapability, type StoredAnnotationCapability,
+  createDefaultAnnotationCapability, serializeDefaultAnnotationPolicy, validateResolvedAnnotationCapability, type StoredAnnotationCapability,
 } from "../lib/annotation-capability"
 import { resolveGenerationProviderInTransaction } from "../lib/provider-configuration"
 import { encryptProviderSecret } from "../lib/provider-secret"
@@ -20,22 +19,18 @@ function capability(): StoredAnnotationCapability {
   value.evidenceSha256 = hash(serializeAnnotationCapabilityEvidence(value))
   return value
 }
-const request = () => ({ revision: 4, mappingId: "mapping-a", evidenceReference: "https://docs.example/images", evidenceNote: "已核对当前 Token 对应配置的双图输入能力。", confirmed: true })
-
-test("能力证据采用有界严格形状并深拷贝，拒绝不明确确认和不安全来源", () => {
-  assert.deepEqual(validateRecordAnnotationCapabilityInput(request()), request())
-  for (const invalid of [null, { ...request(), revision: 0 }, { ...request(), revision: 2_147_483_647 }, { ...request(), revision: NaN },
-    { ...request(), confirmed: false }, { ...request(), confirmed: "true" }, { ...request(), token: "secret" },
-    { ...request(), evidenceReference: "http://docs.example" }, { ...request(), evidenceReference: "https://name:secret@docs.example" },
-    { ...request(), evidenceReference: "https://docs.example/" + "x".repeat(2048) }, { ...request(), evidenceNote: " " },
-    { ...request(), evidenceNote: "x".repeat(2001) }, { ...request(), evidenceNote: "bad\u0000note" },
-    { ...request(), mappingId: " mapping-a" }, { ...request(), mappingId: "x".repeat(129) },
-  ]) assert.throws(() => validateRecordAnnotationCapabilityInput(invalid), AnnotationCapabilityValidationError)
+test("历史管理员证据仍有界校验并深拷贝，不把损坏来源混入旧记录", () => {
   const original = capability()
   const copy = validateAnnotationCapabilities([original])
   copy[0].evidence.note = "本地修改"
   assert.notEqual(original.evidence.note, copy[0].evidence.note)
-  assert.equal(validateRecordAnnotationCapabilityInput({ ...request(), evidenceNote: "x".repeat(2000) }).evidenceNote.length, 2000)
+  for (const evidence of [
+    { ...original.evidence, reference: "http://docs.example" },
+    { ...original.evidence, reference: "https://name:secret@docs.example" },
+    { ...original.evidence, reference: "https://docs.example/" + "x".repeat(2048) },
+    { ...original.evidence, note: " " }, { ...original.evidence, note: "x".repeat(2001) },
+    { ...original.evidence, note: "bad\u0000note" }, { ...original.evidence, confirmed: false },
+  ]) assert.throws(() => validateAnnotationCapabilities([{ ...original, evidence }]), AnnotationCapabilityValidationError)
 })
 
 test("维护可复用记录校验拒绝重复、未知字段和非法revision/digest/time", () => {
@@ -82,15 +77,24 @@ test("冻结来源完整深拷贝且按原证据摘要核对，仍接受原五�
   assert.deepEqual(publicAnnotationCapability(validated), { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null })
 })
 
-test("独立停用请求只接受已保存revision和映射，不能携带连接修改或覆盖证据", () => {
-  assert.deepEqual(validateDisableAnnotationCapabilityInput({ revision: 4, mappingId: "mapping-a" }), { revision: 4, mappingId: "mapping-a" })
-  for (const value of [null, { revision: 0, mappingId: "mapping-a" }, { revision: 2_147_483_647, mappingId: "mapping-a" },
-    { revision: 4, mappingId: "" }, { revision: 4, mappingId: "mapping-a", apiKey: "secret" }, { revision: 4, mappingId: "mapping-a", confirmed: true }]) {
-    assert.throws(() => validateDisableAnnotationCapabilityInput(value), AnnotationCapabilityValidationError)
+test("默认批注冻结应用策略和当前连接，不伪造管理员核验证据", () => {
+  const result = createDefaultAnnotationCapability(4, binding(), hash)
+  assert.deepEqual(Object.keys(result).sort(), ["bindingSha256", "configurationRevision", "evidenceSha256", "expression", "maxInputImages"])
+  assert.equal(result.sourceEvidence, undefined)
+  assert.equal(serializeResolvedAnnotationCapabilityEvidence(result), null)
+  assert.equal(result.evidenceSha256, hash(serializeDefaultAnnotationPolicy(binding())))
+  const policy = JSON.parse(serializeDefaultAnnotationPolicy(binding()))
+  assert.equal(policy.source, "application-default")
+  assert.deepEqual(policy.inputs, ["original", "overlay"])
+  assert.doesNotMatch(JSON.stringify(result), /actorId|confirmed|reference|recordedAt|mappingId/)
+  assert.deepEqual(validateResolvedAnnotationCapability(result, { sha256: hash, mappingId: "mapping-a", configurationRevision: 4 }), result)
+  assert.notEqual(createDefaultAnnotationCapability(4, "1".repeat(64), hash).evidenceSha256, result.evidenceSha256)
+  for (const [revision, digest] of [[0, binding()], [4, "invalid"]] as const) {
+    assert.throws(() => createDefaultAnnotationCapability(revision, digest, hash), AnnotationCapabilityValidationError)
   }
 })
 
-test("公共能力仅含安全状态，未知明确拒绝，不能混入内部摘要或证据", () => {
+test("公共状态保持旧客户端兼容且不能混入内部摘要或历史证据", () => {
   const { mappingId: _mappingId, evidence: _evidence, ...resolved } = capability()
   assert.deepEqual(publicAnnotationCapability(resolved), { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null })
   const unavailable = publicAnnotationCapability(null)
@@ -103,32 +107,37 @@ test("公共能力仅含安全状态，未知明确拒绝，不能混入内部�
   ]) assert.throws(() => validatePublicAnnotationCapability(invalid), AnnotationCapabilityValidationError)
 })
 
-test("真实配置解析仅接受当前revision、连接、接口、实际模型、Token及完整证据绑定", async t => {
+test("真实配置解析默认支持批注，冻结当前连接而不依赖历史人工证据", async t => {
   const originalKey = process.env.PROVIDER_CONFIG_KEY
   process.env.PROVIDER_CONFIG_KEY = Buffer.alloc(32, 47).toString("base64")
   t.after(() => { if (originalKey === undefined) delete process.env.PROVIDER_CONFIG_KEY; else process.env.PROVIDER_CONFIG_KEY = originalKey })
   const row = { baseUrl: settings.baseUrl, apiMode: settings.apiMode, tokenCiphertext: encryptProviderSecret(settings.apiKey),
-    models: [], mappings: [{ id: "mapping-a", name: "名称", modelId: settings.modelId }], modelsSynced: false, revision: 4, annotationCapabilities: [capability()] }
-  let current: typeof row = row
-  let queries = 0
-  const client = { query: async (sql: string) => { assert.match(sql, /FOR SHARE$/); queries++; return { rows: [current] } } } as unknown as PoolClient
-  const frozen = (await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability!
+    models: [], mappings: [{ id: "mapping-a", name: "名称", modelId: settings.modelId }], modelsSynced: false, revision: 4, annotationCapabilities: [] as StoredAnnotationCapability[] }
+  let current: Omit<typeof row, "apiMode"> & { apiMode: "images" | "chat" } = row
+  const client = { query: async (sql: string) => { assert.match(sql, /FOR SHARE$/); return { rows: [current] } } } as unknown as PoolClient
+  const frozen = (await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability
   assert.equal(frozen.expression, "overlay-v1")
-  assert.deepEqual(frozen.sourceEvidence, { mappingId: "mapping-a", evidence: row.annotationCapabilities[0].evidence })
-  assert.notEqual(frozen.sourceEvidence!.evidence, row.annotationCapabilities[0].evidence)
-  assert.equal(hash(serializeResolvedAnnotationCapabilityEvidence(frozen)!), frozen.evidenceSha256)
-  const changed = [
-    { ...row, annotationCapabilities: [] }, { ...row, baseUrl: "https://other.example/v1" },
-    { ...row, apiMode: "chat" as const }, { ...row, tokenCiphertext: encryptProviderSecret("synthetic-different-token") },
+  assert.equal(frozen.sourceEvidence, undefined)
+  assert.equal(frozen.bindingSha256, binding())
+  assert.equal(frozen.evidenceSha256, hash(serializeDefaultAnnotationPolicy(binding())))
+  for (const annotationCapabilities of [[capability()], [{ ...capability(), configurationRevision: 3 }]]) {
+    current = { ...row, annotationCapabilities }
+    assert.deepEqual((await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability, frozen)
+  }
+  for (const candidate of [
+    { ...row, baseUrl: "https://other.example/v1" }, { ...row, apiMode: "chat" as const },
+    { ...row, tokenCiphertext: encryptProviderSecret("synthetic-different-token") },
     { ...row, mappings: [{ ...row.mappings[0], modelId: "another-model" }] },
-    { ...row, annotationCapabilities: [{ ...capability(), configurationRevision: 3 }] },
-    { ...row, annotationCapabilities: [{ ...capability(), evidence: { ...capability().evidence, note: "证据被修改" } }] },
-  ]
-  for (const candidate of changed) {
-    current = candidate as typeof row
-    assert.equal((await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability, null)
+  ]) {
+    current = candidate
+    const resolved = (await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability
+    assert.equal(resolved.expression, "overlay-v1")
+    assert.notEqual(resolved.bindingSha256, frozen.bindingSha256)
+    assert.notEqual(resolved.evidenceSha256, frozen.evidenceSha256)
+    assert.equal(resolved.sourceEvidence, undefined)
   }
   current = { ...row, tokenCiphertext: encryptProviderSecret(settings.apiKey), mappings: [{ ...row.mappings[0], name: "只修改名称" }] }
-  assert.equal((await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability?.bindingSha256, binding(), "同Token重新加密和展示名称不影响绑定")
-  assert.equal(queries, 9)
+  assert.deepEqual((await resolveGenerationProviderInTransaction(client, "mapping-a", 4)).annotationCapability, frozen)
+  await assert.rejects(resolveGenerationProviderInTransaction(client, "mapping-a", 3), /模型配置已被其他管理员修改/)
+  await assert.rejects(resolveGenerationProviderInTransaction(client, "removed", 4), /所选模型已被移除/)
 })

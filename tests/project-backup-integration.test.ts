@@ -15,8 +15,9 @@ import { readDatabaseConfiguration } from "../lib/database-target"
 import { executePrivateGeneration, readVerifiedPrivateAsset } from "../lib/private-generation"
 import { bytesHash, parsePrivateGenerationForm } from "../lib/private-generation-input"
 import { acceptPrivateRun, createPrivateCreation, listPrivateCreations, readPrivateAsset, readPrivateRun } from "../lib/private-workspace-service"
-import { readAdminProvider, recordAdminAnnotationCapability, saveAdminProvider } from "../lib/provider-configuration"
+import { readAdminProvider, saveAdminProvider } from "../lib/provider-configuration"
 import { validateAnnotationSnapshot, type AnnotationSnapshot } from "../lib/image-annotations"
+import { serializeAnnotationCapabilityEvidence, type StoredAnnotationCapability } from "../lib/annotation-capability"
 import { decryptProviderSecret } from "../lib/provider-secret"
 import { PROJECT_BACKUP_TABLES, ProjectBackupError, decodeProjectBackup, exportProjectBackup, preflightProjectRestore, projectBackupStorage, projectRecoverySecrets, restoreProjectBackup, verifyRestoredProjectBackup, type ProjectBackupPayload } from "../lib/project-backup"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
@@ -115,9 +116,7 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     await changePassword(temporary, { currentPassword: created.temporaryPassword, newPassword: password })
     userHeaders.push(await login(username))
   }
-  await saveAdminProvider(adminHeaders, { revision: 0, settings: { baseUrl: "https://synthetic-backup.example/v1", apiKey: "synthetic-backup-provider-token", apiMode: "images" }, models: [], mappings: [{ id: "mapping-backup", name: "合成恢复模型", modelId: "synthetic-model" }], modelsSynced: false })
-  const configurationRevision = (await recordAdminAnnotationCapability(adminHeaders, { revision: 1, mappingId: "mapping-backup",
-    evidenceReference: "https://synthetic-backup.example/input-contract", evidenceNote: "合成恢复夹具确认两张输入，不代表真实模型效果。", confirmed: true })).revision
+  const configurationRevision = (await saveAdminProvider(adminHeaders, { revision: 0, settings: { baseUrl: "https://synthetic-backup.example/v1", apiKey: "synthetic-backup-provider-token", apiMode: "images" }, models: [], mappings: [{ id: "mapping-backup", name: "合成恢复模型", modelId: "synthetic-model" }], modelsSynced: false })).revision
   const identities = await Promise.all(userHeaders.map(headers => accountIdentity(headers)))
   const objects = new Map<string, { bytes: Uint8Array; mediaType: string }>()
   const store: PrivateCosStore = {
@@ -152,6 +151,16 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
   assert.equal(inputHashes[1][0], bytesHash((await readVerifiedPrivateAsset(firstAsset, store)).bytes))
   assert.equal(inputHashes[1].length, 2)
   assert.deepEqual(second.annotationSnapshot, annotationSnapshot)
+  const defaultSnapshot = (await readPrivateRun(identities[0], second.id)).provider.annotationCapability!
+  assert.equal(Object.hasOwn(defaultSnapshot, "sourceEvidence"), false)
+  assert.deepEqual((await readAdminProvider(adminHeaders)).annotationCapabilities, [])
+  // Seed a legacy record only in the marked synthetic fixture, to restore old and new formats together.
+  const legacy: StoredAnnotationCapability = { ...defaultSnapshot, mappingId: "mapping-backup",
+    evidence: { id: randomUUID(), actorId: (await accountIdentity(adminHeaders)).user.id,
+      recordedAt: new Date().toISOString(), reference: "https://synthetic-backup.example/legacy-fixture",
+      note: "历史格式兼容夹具；不代表真实供应商验收。", confirmed: true } }
+  legacy.evidenceSha256 = bytesHash(serializeAnnotationCapabilityEvidence(legacy))
+  await runtime.query('UPDATE app.provider_settings SET "annotationCapabilities"=$1::jsonb WHERE singleton=1', [JSON.stringify([legacy])])
   await assert.rejects(readPrivateAsset(identities[1], assetId, "image"), code("NOT_FOUND"))
   await assert.rejects(readPrivateAsset(await accountIdentity(adminHeaders), assetId, "image"), code("NOT_FOUND"))
   const pendingInput = await input(0, first.id)

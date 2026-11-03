@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import { createHash, randomUUID } from "node:crypto"
 import dns from "node:dns/promises"
 import https from "node:https"
 import { syncBuiltinESMExports } from "node:module"
@@ -9,8 +10,9 @@ import { bootstrapAdministrator, changePassword, createAccount } from "../lib/au
 import { handleAuthRequest } from "../lib/auth/http"
 import { AccountError } from "../lib/auth/errors"
 import { closeDatabase, getDatabase } from "../lib/database"
-import { readAdminProvider, saveAdminProvider, syncAdminProvider, readPublicModelCatalog, resolveGenerationProvider, recordAdminAnnotationCapability, disableAdminAnnotationCapability, MAX_PROVIDER_JSON_BYTES } from "../lib/provider-configuration"
+import { readAdminProvider, saveAdminProvider, syncAdminProvider, readPublicModelCatalog, resolveGenerationProvider, MAX_PROVIDER_JSON_BYTES } from "../lib/provider-configuration"
 import { decryptProviderSecret } from "../lib/provider-secret"
+import { serializeAnnotationCapabilityEvidence, type StoredAnnotationCapability } from "../lib/annotation-capability"
 import { GET as adminGet, PUT as adminPut } from "../app/api/admin/provider/route"
 import { POST as syncPost } from "../app/api/provider/models/route"
 import { GET as catalogGet } from "../app/api/models/route"
@@ -260,121 +262,79 @@ test("专用 PostgreSQL 模型配置：密文、权限、版本并发与草稿�
     assert.deepEqual((await pool.query("SELECT revision FROM app.provider_config_audit ORDER BY revision")).rows, [{ revision: 1 }, { revision: 2 }, { revision: 3 }])
   })
 
-  await t.test("独立能力记录绑定已保存配置，并发revision、资料确认和公开投影均核验", async () => {
+  await t.test("所有已保存映射默认支持批注，空历史记录无需登记且配置换绑立即更新冻结策略", async () => {
     const calls = outbound.length, lookups = dnsMock.mock.callCount()
     let view = await saveAdminProvider(admin, { ...configuration(3, ""), mappings: [configuration().mappings[0], { id: "mapping-b", name: "辅助", modelId: "synthetic-other-model" }] })
-    const evidence = (mappingId = "mapping-a") => ({ revision: view.revision, mappingId, evidenceReference: "https://docs.example/two-image-inputs", evidenceNote: "合成资料仅确认输入契约，不证明真实编辑效果。", confirmed: true })
-    const before = await snapshot()
-    for (const invalid of [{ ...evidence(), confirmed: false }, { ...evidence(), evidenceReference: "http://docs.example" }, { ...evidence(), evidenceNote: "" }, { ...evidence(), settings }, { ...evidence(), revision: view.revision - 1 }]) {
-      const response = await annotationPost(request("/api/admin/provider/annotation-capabilities", invalid, admin))
-      assert.ok(response.status === 400 || response.status === 409)
-    }
-    assert.deepEqual(await snapshot(), before)
-    const results = await Promise.allSettled([recordAdminAnnotationCapability(admin, evidence()), recordAdminAnnotationCapability(adminB.headers, evidence())])
-    assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
-    assert.equal(results.filter(result => result.status === "rejected" && expectCode("PROVIDER_REVISION_CONFLICT")(result.reason)).length, 1)
-    view = await readAdminProvider(admin)
-    const first = view.annotationCapabilities[0]
-    assert.equal(first.mappingId, "mapping-a")
-    assert.equal(first.configurationRevision, view.revision)
-    assert.ok(first.evidence.actorId)
-    const response = await annotationPost(request("/api/admin/provider/annotation-capabilities", evidence("mapping-b"), admin))
-    assert.equal(response.status, 200, await response.clone().text())
-    assert.equal(response.headers.get("cache-control"), "no-store")
-    view = await response.json()
-    assert.equal(view.annotationCapabilities.length, 2)
-    assert.deepEqual(view.annotationCapabilities.find(item => item.mappingId === "mapping-a")!.evidence, first.evidence)
-    assert.ok(view.annotationCapabilities.every(item => item.configurationRevision === view.revision))
-    const catalog = await readPublicModelCatalog(user.headers)
-    assert.deepEqual(catalog.mappings[0].annotation, { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null })
-    assert.doesNotMatch(JSON.stringify(catalog), /docs\.example|合成资料|bindingSha256|evidenceSha256|actorId|recordedAt|gpt-image|synthetic-upstream|synthetic-provider/)
-    const resolved = await resolveGenerationProvider(user.headers, "mapping-a")
-    assert.deepEqual(Object.keys(resolved.annotationCapability!).sort(), ["bindingSha256", "configurationRevision", "evidenceSha256", "expression", "maxInputImages", "sourceEvidence"])
-    assert.deepEqual(resolved.annotationCapability!.sourceEvidence, { mappingId: "mapping-a", evidence: first.evidence })
-    const priorEvidence = view.annotationCapabilities.map(item => item.evidence)
-    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: [...view.mappings].reverse().map(item => ({ ...item, name: item.name + "新名称" })) })
-    assert.deepEqual(view.annotationCapabilities.map(item => item.evidence), priorEvidence)
-    assert.ok(view.annotationCapabilities.every(item => item.configurationRevision === view.revision))
-    assert.equal(view.annotationCapabilities[0].evidenceSha256, first.evidenceSha256)
-    // Entering the same Token does not change its identity, even though AES-GCM uses a fresh nonce.
-    view = await saveAdminProvider(admin, { ...configuration(view.revision), mappings: view.mappings })
-    assert.equal(view.annotationCapabilities.length, 2)
-    // Changing only one actual model preserves the other mapping's evidence.
-    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: view.mappings.map(item => item.id === "mapping-b" ? { ...item, modelId: "synthetic-rebound-model" } : item) })
-    assert.deepEqual(view.annotationCapabilities.map(item => item.mappingId), ["mapping-a"])
-    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-replaced-token"), mappings: view.mappings })
     assert.deepEqual(view.annotationCapabilities, [])
-    assert.equal((await readPublicModelCatalog(user.headers)).mappings[0].annotation.available, false)
-    for (const change of ["apiMode", "baseUrl", "delete"] as const) {
-      view = await recordAdminAnnotationCapability(admin, evidence())
+    const before = await snapshot()
+    const catalog = await readPublicModelCatalog(user.headers)
+    for (const mapping of catalog.mappings) assert.deepEqual(mapping.annotation, { available: true, expression: "overlay-v1", maxInputImages: 2, reason: null })
+    assert.doesNotMatch(JSON.stringify(catalog), /bindingSha256|evidenceSha256|actorId|recordedAt|gpt-image|synthetic-upstream|synthetic-provider/)
+    const frozen = (await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability
+    assert.deepEqual(Object.keys(frozen).sort(), ["bindingSha256", "configurationRevision", "evidenceSha256", "expression", "maxInputImages"])
+    assert.equal(frozen.sourceEvidence, undefined)
+    assert.deepEqual(await snapshot(), before, "读取和默认批注不能产生人工核验证据或配置写入")
+    const originalBinding = frozen.bindingSha256
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: [...view.mappings].reverse().map(item => ({ ...item, name: item.name + "新名称" })) })
+    assert.equal((await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability.bindingSha256, originalBinding)
+    for (const change of ["model", "token", "apiMode", "baseUrl"] as const) {
+      const prior = (await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability
       const nextSettings = { ...view.settings, apiKey: "" }
+      if (change === "token") nextSettings.apiKey = "synthetic-replaced-token"
       if (change === "apiMode") nextSettings.apiMode = "chat"
       if (change === "baseUrl") { nextSettings.baseUrl = "https://other-synthetic.example/v1"; nextSettings.apiKey = "synthetic-new-address-token" }
-      view = await saveAdminProvider(admin, { revision: view.revision, settings: nextSettings, models: view.models, modelsSynced: view.modelsSynced, mappings: change === "delete" ? [] : view.mappings })
-      assert.deepEqual(view.annotationCapabilities, [], `${change} must invalidate the prior binding`)
+      const mappings = change === "model" ? view.mappings.map(item => item.id === "mapping-a" ? { ...item, modelId: "synthetic-rebound-model" } : item) : view.mappings
+      view = await saveAdminProvider(admin, { revision: view.revision, settings: nextSettings, models: view.models, modelsSynced: view.modelsSynced, mappings })
+      const resolved = (await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability
+      assert.notEqual(resolved.bindingSha256, prior.bindingSha256, change)
+      assert.notEqual(resolved.evidenceSha256, prior.evidenceSha256, change)
+      assert.equal(resolved.configurationRevision, view.revision)
+      assert.equal(resolved.sourceEvidence, undefined)
+      assert.deepEqual(view.annotationCapabilities, [])
+      assert.ok((await readPublicModelCatalog(user.headers)).mappings.every(item => item.annotation.available))
     }
-    assert.equal(outbound.length, calls, "记录/继承/失效均不调用模型或同步目录")
+    assert.equal(frozen.bindingSha256, originalBinding, "旧任务冻结策略不随配置换绑改变")
+    assert.equal(outbound.length, calls, "默认批注和配置更新不探测或调用模型")
     assert.equal(dnsMock.mock.callCount(), lookups)
   })
 
-  await t.test("能力记录事务复核等待期间撤销角色或会话不会写入证据", async () => {
+  await t.test("历史人工记录仍可读取和兼容保存，新请求使用默认策略且不改写历史证据", async () => {
     let view = await readAdminProvider(admin)
-    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-last-token") })
-    const actor = await permanent("provider-evidence-admin", "admin")
-    for (const change of ["role", "session"] as const) {
-      const before = await snapshot()
-      const blocker = await pool.connect()
-      try {
-        await blocker.query("BEGIN")
-        await blocker.query('SELECT id FROM app."user" WHERE id=$1 FOR UPDATE', [actor.id])
-        const pending = recordAdminAnnotationCapability(actor.headers, { revision: view.revision, mappingId: "mapping-a", evidenceReference: "https://docs.example", evidenceNote: "仅用于事务撤权测试。", confirmed: true })
-        const assertion = assert.rejects(pending, expectCode(change === "role" ? "FORBIDDEN" : "UNAUTHENTICATED"))
-        let waiting = false
-        for (let index = 0; index < 100; index++) {
-          const state = await pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE $1", ['SELECT id,username,name,role,banned,%FROM app."user" WHERE id=$1 FOR UPDATE'])
-          if (state.rowCount) { waiting = true; break }
-          await delay(10)
-        }
-        assert.equal(waiting, true)
-        if (change === "role") await blocker.query('UPDATE app."user" SET role=$1 WHERE id=$2', ["user", actor.id])
-        else { await assertAccountTestFixture(pool); await blocker.query('DELETE FROM app.session WHERE "userId"=$1', [actor.id]) }
-        await blocker.query("COMMIT")
-        await assertion
-      } finally { await blocker.query("ROLLBACK"); blocker.release() }
-      assert.deepEqual(await snapshot(), before)
-      await pool.query('UPDATE app."user" SET role=$1 WHERE id=$2', ["admin", actor.id])
-      actor.headers = await login("provider-evidence-admin", password)
-    }
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-restored-token") })
+    const resolved = (await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability
+    const legacy: StoredAnnotationCapability = { ...resolved, mappingId: "mapping-a", evidence: {
+      id: randomUUID(), actorId: adminB.id, recordedAt: "2026-10-30T00:00:00.000Z", reference: "https://synthetic.example/legacy-evidence",
+      note: "仅用于兼容历史管理员记录的合成数据", confirmed: true,
+    } }
+    legacy.evidenceSha256 = createHash("sha256").update(serializeAnnotationCapabilityEvidence(legacy)).digest("hex")
+    await pool.query('UPDATE app.provider_settings SET "annotationCapabilities"=$1::jsonb WHERE singleton=1', [JSON.stringify([legacy])])
+    const before = await snapshot()
+    view = await readAdminProvider(admin)
+    assert.deepEqual(view.annotationCapabilities, [legacy])
+    assert.deepEqual((await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability, resolved)
+    assert.equal((await readPublicModelCatalog(user.headers)).mappings[0].annotation.available, true)
+    assert.deepEqual(await snapshot(), before)
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: view.mappings.map(item => ({ ...item, name: "历史映射改名" })) })
+    assert.deepEqual(view.annotationCapabilities, [{ ...legacy, configurationRevision: view.revision }])
+    view = await saveAdminProvider(admin, { ...configuration(view.revision, "synthetic-next-token") })
+    assert.deepEqual(view.annotationCapabilities, [], "遗留记录按原绑定规则失效，但不影响默认批注")
+    assert.equal((await readPublicModelCatalog(user.headers)).mappings[0].annotation.available, true)
+    assert.equal((await resolveGenerationProvider(user.headers, "mapping-a")).annotationCapability.sourceEvidence, undefined)
   })
 
-  await t.test("独立停用受revision保护，仅移除选中能力并续用其他证据，普通生成保持可用", async () => {
-    let view = await readAdminProvider(admin)
-    view = await saveAdminProvider(admin, { ...configuration(view.revision, ""), mappings: [configuration().mappings[0], { id: "mapping-b", name: "第二映射", modelId: "synthetic-second-model" }] })
-    for (const mappingId of ["mapping-a", "mapping-b"]) view = await recordAdminAnnotationCapability(admin, { revision: view.revision, mappingId, evidenceReference: "https://synthetic.example/disable-test", evidenceNote: "独立停用边界合成证据", confirmed: true })
-    const before = await snapshot(), second = structuredClone(view.annotationCapabilities.find(item => item.mappingId === "mapping-b")!)
-    const calls = outbound.length, lookups = dnsMock.mock.callCount()
-    await assert.rejects(disableAdminAnnotationCapability(admin, { revision: view.revision - 1, mappingId: "mapping-a" }), expectCode("PROVIDER_REVISION_CONFLICT"))
-    await assert.rejects(disableAdminAnnotationCapability(admin, { revision: view.revision, mappingId: "removed" }), expectCode("MODEL_MAPPING_NOT_FOUND"))
-    for (const [headers, status] of [[new Headers(), 401], [user.headers, 403], [tempHeaders, 403]] as const) {
-      assert.equal((await annotationDelete(request("/api/admin/provider/annotation-capabilities", { revision: view.revision, mappingId: "mapping-a" }, headers, "DELETE"))).status, status)
+  await t.test("旧管理页面的登记和停用端点已退役，返回410且不写配置或调用模型", async () => {
+    const before = await snapshot(), calls = outbound.length, lookups = dnsMock.mock.callCount()
+    const audits = (await pool.query("SELECT * FROM app.provider_config_audit ORDER BY revision")).rows
+    for (const method of ["POST", "DELETE"] as const) {
+      const response = await (method === "POST" ? annotationPost : annotationDelete)(request("/api/admin/provider/annotation-capabilities", { revision: before[0].revision, mappingId: "mapping-a", confirmed: true }, admin, method))
+      assert.equal(response.status, 410)
+      assert.equal(response.headers.get("cache-control"), "no-store")
+      const body = await response.json()
+      assert.equal(body.error.code, "ANNOTATION_CONFIGURATION_RETIRED")
+      assert.match(body.error.message, /批注已默认可用/)
     }
     assert.deepEqual(await snapshot(), before)
-    const results = await Promise.allSettled([disableAdminAnnotationCapability(admin, { revision: view.revision, mappingId: "mapping-a" }), disableAdminAnnotationCapability(adminB.headers, { revision: view.revision, mappingId: "mapping-a" })])
-    assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
-    assert.equal(results.filter(result => result.status === "rejected" && expectCode("PROVIDER_REVISION_CONFLICT")(result.reason)).length, 1)
-    view = await readAdminProvider(admin)
-    assert.equal(view.revision, before[0].revision + 1)
-    assert.deepEqual(view.annotationCapabilities, [{ ...second, configurationRevision: view.revision }])
-    const after = (await snapshot())[0]
-    for (const field of ["baseUrl", "apiMode", "tokenCiphertext", "models", "mappings", "modelsSynced"]) assert.deepEqual(after[field], before[0][field])
-    const ordinary = await resolveGenerationProvider(user.headers, "mapping-a")
-    assert.ok(ordinary.settings.apiKey)
-    assert.equal(ordinary.mapping.modelId, actualModelId)
-    assert.equal(ordinary.annotationCapability, null)
-    const catalog = await readPublicModelCatalog(user.headers)
-    assert.equal(catalog.configured, true)
-    assert.equal(catalog.mappings[0].annotation.available, false)
-    assert.equal(catalog.mappings[1].annotation.available, true)
+    assert.deepEqual((await pool.query("SELECT * FROM app.provider_config_audit ORDER BY revision")).rows, audits)
     assert.equal(outbound.length, calls)
     assert.equal(dnsMock.mock.callCount(), lookups)
   })
