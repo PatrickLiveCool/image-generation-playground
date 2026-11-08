@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.3...v0.4.4) (2026-11-08)
+
+
+### Bug Fixes
+
+* **annotations:** clarify completion and generation actions ([#33](https://github.com/PatrickLiveCool/image-generation-playground/issues/33)) ([aede835](https://github.com/PatrickLiveCool/image-generation-playground/commit/aede8358933053122eec604b0d28bc42eb5a62b7))
+
 ## [0.4.3](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.2...v0.4.3) (2026-11-03)
 
 
