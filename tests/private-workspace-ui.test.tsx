@@ -6,7 +6,8 @@ import { IDBFactory, IDBObjectStore } from "fake-indexeddb"
 import { Window } from "happy-dom"
 import { act } from "react"
 import type { Root } from "react-dom/client"
-import { addCreation, applyPrivateRun, emptyWorkspace, mergePrivateWorkspace, newCreation, patchCreationDraft, privateRunGeneration, startCreationGeneration, writeWorkspace, selectCreationVersion, markPrivateRunUnknown, accountStorageKey, EMERGENCY_DRAFT_KEY, emergencyDraftEntry, serializeEmergencyDrafts } from "../lib/creative-workspace"
+import { addCreation, applyPrivateRun, emptyWorkspace, mergePrivateWorkspace, newCreation, patchCreationDraft, privateRunGeneration, startCreationGeneration, writeWorkspace, readWorkspace, restoreWorkspace, selectCreationVersion, markPrivateRunUnknown, accountStorageKey, EMERGENCY_DRAFT_KEY, emergencyDraftEntry, serializeEmergencyDrafts } from "../lib/creative-workspace"
+import { createEmptyAnnotationSnapshot, type AnnotationDraft } from "../lib/image-annotations"
 import type { PrivateCreation, PrivateRun } from "../lib/private-workspace-types"
 import { listPrivateWorkspace, requestPrivateRun } from "../lib/private-workspace-client"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "../lib/account-client"
@@ -90,7 +91,7 @@ test("switching accounts aborts the old generation and late results cannot enter
     throw new Error(`Unexpected offline request: ${path}`)
   })
   const root = await mount(t, accountA)
-  await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(respond))
+  await flush(() => button("生成新版本").click()); await eventually(() => assert.ok(respond))
   currentAccount = accountB
   await act(async () => root.render(<ImageCombiner accountId={accountB} />))
   await eventually(() => assert.ok(win.document.body.textContent.includes("账号 B 创作")))
@@ -118,7 +119,7 @@ test("temporary same-account checks keep the submitted POST alive and never subm
   })
   const root = await mount(t, account)
   const visible = async (value: boolean) => { await act(async () => root.render(<AccountVisibilityContext.Provider value={value}><ImageCombiner accountId={account} /></AccountVisibilityContext.Provider>)) }
-  await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(respond))
+  await flush(() => button("生成新版本").click()); await eventually(() => assert.ok(respond))
   await visible(false); assert.equal(signal?.aborted, false)
   await visible(true); assert.equal(signal?.aborted, false)
   assert.equal(button("生成中…").disabled, true)
@@ -128,7 +129,7 @@ test("temporary same-account checks keep the submitted POST alive and never subm
   await flush(() => respond!(Response.json({ run: run({ id: submittedId, parentVersionId: rid, version: 2 }) })))
   await visible(true)
   await eventually(() => assert.ok(win.document.querySelector('[aria-label="选择 V2"][aria-pressed="true"]')))
-  assert.equal(button("修改 V2").textContent, "修改 V2")
+  assert.equal(button("生成新版本").textContent, "生成新版本")
   assert.equal(postCount, 1); assert.equal(getCount, 0)
   assert.equal(workspaceReads, 1, "same account visibility must not remount the editor")
 })
@@ -189,15 +190,156 @@ test("the actual editor retries metadata and submits an annotation-only edit wit
   const instruction = win.document.querySelector('textarea[aria-label="批注 1 的说明"]')!
   await flush(() => { Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(instruction, "只把该区域改成绿色"); instruction.dispatchEvent(new win.Event("input", { bubbles: true })) })
   assert.equal(prompt().value, "")
-  assert.equal(button("修改 V1").disabled, false)
+  assert.equal(button("生成新版本").disabled, false)
   assert.equal(metadataReads, 2)
-  await flush(() => button("修改 V1").click())
+  await flush(() => button("生成新版本").click())
   await eventually(() => assert.ok(submittedForm()))
   const form = submittedForm(), snapshot = JSON.parse(String(form.get("annotationSnapshot")))
   assert.equal(form.get("parentVersionId"), rid); assert.equal(form.get("prompt"), "")
   assert.match(snapshot.marks[0].id, /^[0-9a-f-]{36}$/)
   assert.deepEqual(snapshot, { schema: 1, coordinateSpace: "encoded-pixels-v1", baseVersionId: rid, image: imageMetadata, marks: [{ id: snapshot.marks[0].id, number: 1, instruction: "只把该区域改成绿色", geometry: { type: "rectangle", x: 140, y: 70, width: 120, height: 60 } }] })
   assert.equal(form.has("image1"), false); assert.equal(form.has("image1Url"), false)
+})
+
+function filledAnnotations(numbers = [1, 2, 4, 6]): AnnotationDraft {
+  return { snapshot: { ...createEmptyAnnotationSnapshot(rid, { assetId: asset.split("/").at(-1)!, width: 400, height: 200, orientation: 1, pages: 1 }),
+    marks: numbers.map((number, index) => ({ id: `77777777-7777-4777-8777-77777777777${index}`, number, instruction: `修改区域 ${number}`, geometry: { type: "rectangle", x: 20 + index * 60, y: 20, width: 40, height: 40 } })) }, revision: 4, nextNumber: Math.max(...numbers) + 1 }
+}
+async function loadBaseImage(version = 1) {
+  const image = win.document.querySelector<InstanceType<typeof win.HTMLImageElement>>(`img[alt^="V${version}："]`)!
+  assert.ok(image)
+  Object.defineProperties(image, { naturalWidth: { configurable: true, value: 400 }, naturalHeight: { configurable: true, value: 200 }, decode: { configurable: true, value: async () => {} } })
+  await flush(() => image.dispatchEvent(new win.Event("load")))
+  await eventually(() => assert.equal(button("添加中心区域").disabled, false))
+}
+function annotationField(number: number) {
+  const field = win.document.querySelector<InstanceType<typeof win.HTMLTextAreaElement>>(`textarea[aria-label="批注 ${number} 的说明"]`)
+  assert.ok(field); return field
+}
+function enterAnnotation(number: number, value: string) {
+  const field = annotationField(number)
+  Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(field, value)
+  field.dispatchEvent(new win.Event("input", { bubbles: true }))
+}
+
+test("four restored annotations recover from a supplemental-reference conflict and submit the latest text once", async t => {
+  const account = "annotation-reference-conflict", original = run({ version: 7 }), snapshot = filledAnnotations()
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote([original])])
+  Object.assign(state.creations[0].draft, { prompt: "按照四条批注继续修改", useUrls: true, image1Url: asset, annotationDrafts: { [rid]: snapshot } })
+  await writeWorkspace(state, 0, "conflict-seed", account)
+  let submitted: FormData | undefined, postCount = 0
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote([original])] })
+    if (path === `${asset}/metadata`) return Response.json(snapshot.snapshot.image)
+    if (path === "/api/generate-image") {
+      postCount++; submitted = init!.body as FormData
+      return Response.json({ run: run({ id: String(submitted.get("clientRequestId")), version: 8, parentVersionId: rid, annotationSnapshot: JSON.parse(String(submitted.get("annotationSnapshot"))) }) })
+    }
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, account); await loadBaseImage(7)
+  const actions = win.document.querySelector('[aria-label="生成操作"]')!
+  assert.ok(actions); assert.ok(actions.contains(button("生成新版本")))
+  assert.match(actions.textContent, /基于 V7/); assert.match(actions.textContent, /4 条批注/)
+  assert.equal(button("生成新版本").disabled, true)
+  assert.match(actions.textContent, /参考图/)
+  assert.equal(postCount, 0)
+  await flush(() => button("移除参考图").click())
+  assert.equal(button("生成新版本").disabled, false)
+  assert.equal(win.document.querySelectorAll('textarea[aria-label^="批注 "]').length, 4)
+  assert.equal(prompt().value, "按照四条批注继续修改")
+  assert.equal(win.document.body.textContent.includes("请移除后统一提交"), false)
+  assert.equal([...win.document.querySelectorAll("button")].some(item => item.textContent?.trim() === "移除参考图"), false)
+  // No completion click or persistence delay may be required to submit the final keystroke.
+  await flush(() => { enterAnnotation(6, "最后输入：把雪花改成腊梅"); button("生成新版本").click() })
+  await eventually(() => assert.ok(submitted))
+  assert.equal(postCount, 1)
+  const form = submitted!, actual = JSON.parse(String(form.get("annotationSnapshot")))
+  assert.equal(form.get("parentVersionId"), rid); assert.equal(form.get("prompt"), "按照四条批注继续修改")
+  assert.deepEqual(actual.marks.map((mark: { number: number }) => mark.number), [1, 2, 4, 6])
+  assert.equal(actual.marks[3].instruction, "最后输入：把雪花改成腊梅")
+  for (const field of ["image1", "image2", "image1Url", "image2Url"]) assert.equal(form.has(field), false)
+})
+
+for (const useUrls of [false, true]) test(`annotations block every supplemental image input in ${useUrls ? "URL" : "file"} mode`, async t => {
+  const account = `annotation-block-input-${useUrls}`, snapshot = filledAnnotations([1])
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote()])
+  Object.assign(state.creations[0].draft, { prompt: "保留批注", useUrls, annotationDrafts: { [rid]: snapshot } })
+  await writeWorkspace(state, 0, "block-input-seed", account)
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path === `${asset}/metadata`) return Response.json(snapshot.snapshot.image)
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, account); await loadBaseImage()
+  const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])], "offline.png", { type: "image/png" })
+  const fileInput = win.document.querySelector<InstanceType<typeof win.HTMLInputElement>>("#file1")
+  if (fileInput) {
+    assert.equal(fileInput.disabled || Boolean(fileInput.closest("fieldset[disabled]")), true)
+    Object.defineProperty(fileInput, "files", { configurable: true, value: [file] })
+    await flush(() => fileInput.dispatchEvent(new win.Event("change", { bubbles: true })))
+  }
+  const linkInput = win.document.querySelector<InstanceType<typeof win.HTMLInputElement>>('input[aria-label="补充参考图的链接"]')
+  if (linkInput) {
+    assert.equal(linkInput.disabled || linkInput.readOnly || Boolean(linkInput.closest("fieldset[disabled]")), true)
+    await flush(() => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(linkInput, asset); linkInput.dispatchEvent(new win.Event("input", { bubbles: true })) })
+  }
+  const drop = new win.Event("drop", { bubbles: true, cancelable: true })
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [file], types: ["Files"] } })
+  await flush(() => prompt().dispatchEvent(drop))
+  assert.equal(drop.defaultPrevented, true)
+  const paste = new win.Event("paste", { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, "clipboardData", { value: { items: [{ type: "image/png", getAsFile: () => file }] } })
+  await flush(() => prompt().dispatchEvent(paste))
+  assert.equal(paste.defaultPrevented, true)
+  // Persist a real input change after all ingress attempts and inspect the saved draft.
+  await typePrompt("仍只使用原图与批注")
+  await act(async () => { await delay(240) })
+  const saved = restoreWorkspace(await readWorkspace(account)).creations[0].draft
+  assert.equal(saved.image1, null); assert.equal(saved.image2, null)
+  assert.equal(saved.image1Url, ""); assert.equal(saved.image2Url, "")
+  assert.equal(saved.annotationDrafts?.[rid].snapshot.marks[0].instruction, "修改区域 1")
+  assert.equal(button("生成新版本").disabled, false)
+})
+
+test("missing annotation guidance focuses the field, completion keeps the draft, and refresh restores it", async t => {
+  const account = "annotation-complete-recover", snapshot = filledAnnotations([1])
+  snapshot.snapshot.marks[0].instruction = ""
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote()])
+  state.creations[0].draft.annotationDrafts = { [rid]: snapshot }
+  await writeWorkspace(state, 0, "complete-seed", account)
+  let postCount = 0
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path === `${asset}/metadata`) return Response.json(snapshot.snapshot.image)
+    if (init?.method === "POST") postCount++
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  const root = await mount(t, account); await loadBaseImage()
+  assert.equal(button("生成新版本").disabled, true)
+  await flush(() => button("去填写").click())
+  assert.equal(win.document.activeElement?.getAttribute("aria-label"), "批注 1 的说明")
+  await flush(() => enterAnnotation(1, "完成后仍可修改，刷新不丢失"))
+  const done = [...annotationField(1).parentElement!.querySelectorAll("button")].find(item => item.textContent?.trim() === "完成")
+  assert.ok(done)
+  await flush(() => done.click())
+  assert.match(win.document.body.textContent, /批注 1 已录入/)
+  assert.equal(postCount, 0); assert.equal(button("生成新版本").disabled, false)
+  assert.equal(annotationField(1).value, "完成后仍可修改，刷新不丢失")
+  await act(async () => { await delay(240) })
+  await act(async () => root.unmount())
+  await mount(t, account); await loadBaseImage()
+  assert.equal(annotationField(1).value, "完成后仍可修改，刷新不丢失")
+  assert.equal(button("生成新版本").disabled, false); assert.equal(postCount, 0)
+  t.mock.method(IDBObjectStore.prototype, "put", () => { throw new DOMException("disk full", "QuotaExceededError") })
+  await flush(() => enterAnnotation(1, "保存失败时仍在本页保留"))
+  await eventually(() => assert.match(win.document.body.textContent, /暂时无法保存/))
+  assert.equal(annotationField(1).value, "保存失败时仍在本页保留")
+  assert.equal(win.document.body.textContent.includes("批注已保存在"), false)
+  assert.equal(postCount, 0)
 })
 
 test("late document previews do not restore an explicitly removed file", async t => {
@@ -243,7 +385,7 @@ test("actual editor posts original parent and prompt, keeps another creation iso
   })
   await mount(t, account)
   assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
-  await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(resolveRun))
+  await flush(() => button("生成新版本").click()); await eventually(() => assert.ok(resolveRun))
   await flush(() => button("新建创作").click()); await eventually(() => assert.equal(prompt().value, ""))
   await typePrompt("另一创作输入")
   await flush(() => resolveRun!(Response.json({ run: run({ id: submittedId, version: 3, parentVersionId: rid }) })))
@@ -264,7 +406,7 @@ test("unknown generation exposes status and repair without another generation, p
     if (path === `/api/runs/${requestId}/repair`) { assert.equal(init?.method, "POST"); assert.equal(init?.body, undefined); return Response.json({ run: run({ id: requestId, version: 2, parentVersionId: rid }) }) }
     throw new Error(`Unexpected offline request: ${path}`)
   })
-  await mount(t, account); await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(button("查看状态")))
+  await mount(t, account); await flush(() => button("生成新版本").click()); await eventually(() => assert.ok(button("查看状态")))
   assert.equal(prompt().value, "修改首版"); assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
   await typePrompt("之后输入的新草稿"); await flush(() => button("查看状态").click()); assert.match(win.document.body.textContent, /等待补记保存/)
   await flush(() => button("仅补记保存").click()); assert.equal(prompt().value, "之后输入的新草稿"); assert.ok(win.document.querySelector('[aria-label="选择 V2"][aria-pressed="true"]'))
@@ -360,7 +502,7 @@ test("stopping the wait keeps an unknown task and ignores the late original resp
     if (path === "/api/generate-image") { signal = init?.signal; submitted = String((init!.body as FormData).get("clientRequestId")); return new Promise<Response>(resolve => { resolveRun = resolve }) }
     throw new Error(`Unexpected offline request: ${path}`)
   })
-  await mount(t, account); await flush(() => button("修改 V1").click()); await eventually(() => assert.ok(resolveRun))
+  await mount(t, account); await flush(() => button("生成新版本").click()); await eventually(() => assert.ok(resolveRun))
   await flush(() => button("停止等待").click()); assert.equal(signal?.aborted, true)
   await flush(() => resolveRun!(Response.json({ run: run({ id: submitted, version: 2, parentVersionId: rid }) })))
   assert.equal(prompt().value, "保持可恢复"); assert.ok(button("查看状态")); assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]')); assert.equal(win.document.querySelector('[aria-label="选择 V2"]'), null)

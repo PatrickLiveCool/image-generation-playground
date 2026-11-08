@@ -43,9 +43,7 @@ interface InputSectionProps {
   documentName: string
   documentText: string
   documentFile: File | null
-  canGenerate: boolean
   hasImages: boolean
-  onGenerate: () => void
   onToast: (message: string, type?: "success" | "error") => void
   onClearAll: () => void
   onImageUpload: (file: File, slot: 1 | 2) => Promise<void>
@@ -59,9 +57,10 @@ interface InputSectionProps {
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   baseGeneration?: Generation
   pendingGeneration?: Generation
-  submitLabel: string
   annotationContent?: React.ReactNode
   hasAnnotations?: boolean
+  referenceCount: number
+  onClearReferences: () => void
 }
 
 export const InputSection = memo(function InputSection({
@@ -69,10 +68,10 @@ export const InputSection = memo(function InputSection({
   prompt, setPrompt, aspectRatio, setAspectRatio, availableAspectRatios,
   selectedMappingId, setSelectedMappingId, quality, setQuality,
   useUrls, setUseUrls, image1Preview, image2Preview, image1Url, image2Url, documentName, documentText, documentFile,
-  canGenerate, onGenerate, onClearAll, onImageUpload, onUrlChange, onClearImage,
+  onClearAll, onImageUpload, onUrlChange, onClearImage,
   onDocumentUpload, onClearDocument,
   onKeyDown, onPromptPaste, onImageFullscreen, promptTextareaRef,
-  baseGeneration, pendingGeneration, submitLabel, annotationContent, hasAnnotations,
+  baseGeneration, pendingGeneration, annotationContent, hasAnnotations, referenceCount, onClearReferences,
 }: InputSectionProps) {
   const pending = Boolean(pendingGeneration)
   const editing = Boolean(baseGeneration?.imageUrl)
@@ -80,16 +79,16 @@ export const InputSection = memo(function InputSection({
   const referenceSlots: Array<1 | 2> = editing && !image2Preview && !image2Url ? [1] : [1, 2]
 
   const uploadFile = useCallback((event: React.ChangeEvent<HTMLInputElement>, slot: 1 | 2) => {
-    if (pending) return
+    if (pending || hasAnnotations) return
     const file = event.target.files?.[0]
     if (file) { void onImageUpload(file, slot); event.target.value = "" }
-  }, [pending, onImageUpload])
+  }, [pending, hasAnnotations, onImageUpload])
   const dropFile = useCallback((event: React.DragEvent, slot: 1 | 2) => {
     event.preventDefault()
-    if (pending) return
+    if (pending || hasAnnotations) return
     const file = event.dataTransfer.files[0]
     if (file && isImageFile(file)) void onImageUpload(file, slot)
-  }, [pending, onImageUpload])
+  }, [pending, hasAnnotations, onImageUpload])
   const uploadDocument = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (pending) return
     const file = event.target.files?.[0]
@@ -100,8 +99,8 @@ export const InputSection = memo(function InputSection({
     if (pending) return
     const preview = slot === 1 ? image1Preview : image2Preview
     if (preview) onImageFullscreen(preview)
-    else document.getElementById(`file${slot}`)?.click()
-  }, [pending, image1Preview, image2Preview, onImageFullscreen])
+    else if (!hasAnnotations) document.getElementById(`file${slot}`)?.click()
+  }, [pending, hasAnnotations, image1Preview, image2Preview, onImageFullscreen])
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -171,15 +170,20 @@ export const InputSection = memo(function InputSection({
           ) : <p className="text-[11px] leading-relaxed text-gray-500">支持 TXT、MD、CSV、JSON、HTML、XML、PDF 和 DOCX，单个文档最大 10 MB。</p>}
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2" id="creation-references">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-gray-300">{editing ? "补充参考图（可选）" : "参考图片（可选）"}</p>
-            <div className="inline-flex border border-gray-600 bg-black/50">
+            <p className="text-xs font-medium text-gray-300">{hasAnnotations ? "补充参考图" : editing ? "补充参考图（可选）" : "参考图片（可选）"}</p>
+            {!hasAnnotations && <div className="inline-flex border border-gray-600 bg-black/50">
               <button type="button" title="切换输入方式会清空当前参考图" onClick={() => setUseUrls(false)} className={cn("px-2 py-1 text-xs", !useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>文件</button>
               <button type="button" title="切换输入方式会清空当前参考图" onClick={() => setUseUrls(true)} className={cn("px-2 py-1 text-xs", useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>链接</button>
-            </div>
+            </div>}
           </div>
-          {hasAnnotations ? <p className="text-[11px] leading-relaxed text-amber-300">区域批注已使用原图与标注图两个输入。补充参考图会保留，请移除后统一提交。</p> : editing && referenceSlots.length > 1 && <p className="text-[11px] leading-relaxed text-amber-300">基准图已自动加入，请保留一张补充参考图后提交。</p>}
+          {hasAnnotations ? referenceCount > 0 ? <div className="space-y-2 rounded border border-amber-300/30 p-2">
+            <p className="text-xs text-amber-200">批注修改暂不支持同时使用补充参考图。移除参考图后，批注和修改要求会保留。</p>
+            <div className="flex gap-2">{[image1Preview, image2Preview].map((preview, index) => preview && <button key={index} type="button" onClick={() => onImageFullscreen(preview)} aria-label={`查看补充参考图 ${index + 1}`} className="min-w-0 flex-1"><img src={preview} alt={`补充参考图 ${index + 1}`} className="h-24 w-full object-contain" /></button>)}</div>
+            <Button type="button" variant="outline" onClick={onClearReferences} className="h-8 border-gray-600 bg-transparent text-xs">移除参考图</Button>
+          </div> : <p className="text-[11px] text-gray-400">批注修改期间暂停添加补充参考图。</p> : <>
+          {editing && referenceSlots.length > 1 && <p className="text-[11px] leading-relaxed text-amber-300">基准图已自动加入，请保留一张补充参考图后提交。</p>}
           {useUrls ? (
             <div className="space-y-2">
               {referenceSlots.map(slot => {
@@ -193,10 +197,9 @@ export const InputSection = memo(function InputSection({
               {referenceSlots.map(slot => <div key={slot} className="min-w-0"><ImageUploadBox imageNumber={slot} preview={slot === 1 ? image1Preview : image2Preview} onDrop={event => dropFile(event, slot)} onClear={() => { if (!pending) onClearImage(slot) }} onSelect={() => selectImage(slot)} /><input id={`file${slot}`} type="file" accept="image/*,.heic,.heif" className="hidden" onChange={event => uploadFile(event, slot)} /></div>)}
             </div>
           )}
+          </>}
         </div>
-        <Button type="button" onClick={onGenerate} disabled={pending || !canGenerate} className="h-11 w-full bg-white text-sm font-semibold text-black hover:bg-gray-200">{pending ? "生成中…" : submitLabel}</Button>
       </fieldset>
-      {pending && <p role="status" className="text-xs leading-relaxed text-gray-400">正在生成，可切换到其他创作；本轮输入会保留。</p>}
     </div>
   )
 })

@@ -41,7 +41,7 @@ export function HowItWorksModal({ open, onOpenChange }: HowItWorksModalProps) {
             <h3 className="text-lg font-semibold text-white mb-2">3. 创建与持续修改</h3>
             <p className="leading-relaxed mb-2">新建创作，选择模型名称，输入画面描述和期望比例，点击“生成图片”。首版完成后，当前展示的图片会自动成为下一轮修改的基准。</p>
             <ul className="list-disc list-inside space-y-2 ml-2">
-              <li>继续填写修改要求，点击“修改 V1”等按钮即可生成新版本；按钮中的版本号表示本轮使用的基准图。</li>
+              <li>继续填写修改要求，或在图上标记区域并填写批注。点击“完成”结束本条编辑，再点击“生成新版本”；生成按钮上方显示本轮使用的基准版本。</li>
               <li>想从旧版本继续时，在创作历史中选中它，再提交修改要求。已有版本都会保留。</li>
               <li>首次生成可添加最多两张参考图；修改已有版本时，可再添加一张补充参考图。提交的单张参考图不超过 10 MB。</li>
               <li>提示词下方可以上传 TXT、MD、CSV、JSON、HTML、XML、PDF 或 DOCX 文档，提交时原始文档会保存到私有 COS，服务端提取文字和可用图片后作为本轮上下文发送。</li>
