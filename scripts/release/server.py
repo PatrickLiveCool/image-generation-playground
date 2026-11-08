@@ -1272,6 +1272,9 @@ class Runtime:
         require(source_schema.get('assetCapabilityVersion') == target_schema.get('assetCapabilityVersion')
                 and (source_schema.get('browserWorkspaceSchema') == target_schema.get('browserWorkspaceSchema') or annotation_upgrade),
                 'browser or asset formats are not rollback compatible')
+        if is_account_release(source_schema) and is_account_release(target_schema):
+            require(target_schema['database']['maxVersion'] >= source_schema['database']['minVersion'],
+                    'database contracts are not rollback compatible')
         try:
             self.prepare_database(target)
             if not self.system.process_matches(target):

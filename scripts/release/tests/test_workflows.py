@@ -99,14 +99,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         policy = json.loads(policy_file.read_text())
         policy['browserWorkspaceSchema'] = 1
         policy_file.write_text(json.dumps(policy))
-        self.assertNotEqual(self.run_check().returncode, 0, '0005 cannot claim workspace schema 1')
+        self.assertNotEqual(self.run_check().returncode, 0, '0006 cannot claim workspace schema 1')
 
-        annotation = policy['database']['migrations'].pop()
-        self.assertEqual(annotation['name'][:4], '0005')
-        (self.source / 'migrations' / annotation['name']).unlink()
         catalog = self.source / 'scripts/database/migration-catalog.ts'
-        catalog.write_text(''.join(line for line in catalog.read_text().splitlines(keepends=True)
-                                  if annotation['name'] not in line))
+        for version in ['0006', '0005']:
+            migration = policy['database']['migrations'].pop()
+            self.assertEqual(migration['name'][:4], version)
+            (self.source / 'migrations' / migration['name']).unlink()
+            catalog.write_text(''.join(line for line in catalog.read_text().splitlines(keepends=True)
+                                      if migration['name'] not in line))
         policy['database']['minVersion'] = policy['database']['maxVersion'] = '0004'
         policy_file.write_text(json.dumps(policy))
         result = self.run_check('--tag', self.tag)
@@ -114,7 +115,7 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         policy['browserWorkspaceSchema'] = 2
         policy_file.write_text(json.dumps(policy))
-        self.assertNotEqual(self.run_check().returncode, 0, 'workspace schema 2 requires 0005')
+        self.assertNotEqual(self.run_check().returncode, 0, 'workspace schema 2 requires at least 0005')
 
     def test_unknown_and_repeated_cli_arguments_are_rejected(self) -> None:
         for arguments in (("--skip-checks",), ("--tag",), ("--tag", self.tag, "--tag", self.tag)):

@@ -12,4 +12,5 @@ export type PrivateRun = {
 export type PrivateCreation = {
   id: string; title: string; revision: number; createdAt: number; updatedAt: number; versions: PrivateRun[]
 }
-export type PrivateWorkspaceResponse = { creations: PrivateCreation[] }
+export type PrivateDeletedCreation = { id: string; revision: number; deletedAt: number }
+export type PrivateWorkspaceResponse = { creations: PrivateCreation[]; deletedCreations: PrivateDeletedCreation[] }

@@ -77,7 +77,7 @@ function canonical(value: unknown): string {
   if (value && typeof value === "object") return `{${Object.keys(value).sort().map(name => `${JSON.stringify(name)}:${canonical((value as Record<string, unknown>)[name])}`).join(",")}}`
   return JSON.stringify(value)
 }
-function authenticatedInvalidArchive(payload: ProjectBackupPayload, change: (value: ProjectBackupPayload) => void): Buffer {
+function authenticatedArchive(payload: ProjectBackupPayload, change: (value: ProjectBackupPayload) => void): Buffer {
   const value = structuredClone(payload); change(value)
   const { contentSha256: _digest, ...content } = value
   value.contentSha256 = createHash("sha256").update(canonical(content)).digest("hex")
@@ -174,6 +174,8 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
   assert.notEqual(temporaryBeforeBackup, testedTemporary.temporaryPassword)
   const bulkCreationIds = Array.from({ length: 205 }, () => randomUUID())
   await runtime.query('INSERT INTO app.creations ("ownerId",id,title) SELECT $1,value,\'合成批量恢复创作\' FROM unnest($2::uuid[]) AS value', [identities[0].user.id, bulkCreationIds])
+  const deletedAt = "2026-10-29T01:00:00.000Z"
+  await runtime.query('UPDATE app.creations SET "deletedAt"=$2 WHERE id=$1', [bulkCreationIds[0], deletedAt])
   const client = await migration.connect()
   try {
     await createPrivateCreation(adminHeaders, { id: "00000000-0000-0000-0000-000000000000", title: "已有合法UUID空创作" })
@@ -189,6 +191,7 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     assert.ok(Date.parse(String(temporaryAccount.temporaryPasswordExpiresAt)) > Date.parse(payload.createdAt))
     assert.ok(payload.tables.creations.some(row => row.id === "00000000-0000-0000-0000-000000000000"))
     assert.equal(payload.tables.creations.length, 208)
+    assert.equal(payload.tables.creations.find(row => row.id === bulkCreationIds[0])!.deletedAt, deletedAt)
     const assertVerified = async () => assert.deepEqual(await verifyRestoredProjectBackup(client, configuration, archive, key, storage), {
       verified: true, contentSha256: payload.contentSha256, rowCount: Object.values(payload.tables).reduce((sum, rows) => sum + rows.length, 0),
     })
@@ -205,7 +208,7 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     for (const change of corruptions) {
       let queries = 0
       const untouched = { query: async () => { queries++; return { rows: [] } } }
-      const invalid = authenticatedInvalidArchive(payload, change)
+      const invalid = authenticatedArchive(payload, change)
       await assert.rejects(restoreProjectBackup(untouched, configuration, invalid, key, storage), ProjectBackupError)
       await assert.rejects(preflightProjectRestore(untouched, configuration, invalid, key, storage), ProjectBackupError)
       assert.equal(queries, 0)
@@ -283,6 +286,8 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     assert.deepEqual(recoveredAnnotation.annotationExecution, annotatedVersion.annotationExecution)
     assert.equal((await listPrivateCreations(restoredUser)).find(creation => creation.id === creationIds[0])!.versions.length, 3)
     assert.equal((await runtime.query('SELECT count(*)::integer AS count FROM app.creations WHERE id=ANY($1::uuid[])', [bulkCreationIds])).rows[0].count, bulkCreationIds.length)
+    assert.equal((await listPrivateCreations(restoredUser)).some(creation => creation.id === bulkCreationIds[0]), false)
+    assert.equal((await runtime.query('SELECT "deletedAt" FROM app.creations WHERE id=$1', [bulkCreationIds[0]])).rows[0].deletedAt.toISOString(), deletedAt)
     assert.equal((await listPrivateCreations(restoredOther))[0].versions.length, 1)
     assert.equal((await readPrivateRun(recovered, pendingInput.command.clientRequestId)).public.status, "unknown")
     const restoredAsset = await readPrivateAsset(recovered, assetId, "image")
@@ -292,7 +297,28 @@ test("真实专用PG：三账号、原图和文档、认证备份、空目标恢
     assert.equal((await readAdminProvider(restoredAdmin)).secretConfigured, true)
     await manageAccount(restoredAdmin, recovered.user.id, { action: "disable" })
     await assert.rejects(accountIdentity(restoredUser), code("UNAUTHENTICATED"))
+
+    // 旧归档以原始0005字段和摘要认证，恢复至当前0006空库时才补nullable删除标记。
+    const legacyArchive = authenticatedArchive(payload, value => {
+      value.migrations = value.migrations.filter(entry => !entry.name.startsWith("0006"))
+      value.release.database = { ...policy.database, minVersion: "0005", maxVersion: "0005", migrations: value.migrations }
+      for (const creation of value.tables.creations) delete creation.deletedAt
+    })
+    const legacy = decodeProjectBackup(legacyArchive, key)
+    assert.equal(Object.hasOwn(legacy.tables.creations[0], "deletedAt"), false)
+    await cleanup()
+    if (bundledCli) {
+      assert.equal(executeBundle("restore-preflight", legacyArchive).status.ready, true)
+      assert.equal(executeBundle("restore", legacyArchive).status.restored, true)
+      assert.equal(executeBundle("verify-restore", legacyArchive).status.verified, true)
+    } else {
+      assert.equal((await preflightProjectRestore(client, configuration, legacyArchive, key, storage)).ready, true)
+      await restoreProjectBackup(client, configuration, legacyArchive, key, storage)
+    }
+    assert.equal((await verifyRestoredProjectBackup(client, configuration, legacyArchive, key, storage)).contentSha256, legacy.contentSha256)
+    assert.equal((await runtime.query('SELECT count(*)::integer AS count FROM app.creations WHERE "deletedAt" IS NOT NULL')).rows[0].count, 0)
+    assert.equal((await runtime.query('SELECT count(*)::integer AS count FROM app.creations')).rows[0].count, 208)
     assert.equal(modelCalls, 3)
-    console.log(JSON.stringify({ projectRecovery: "passed", accounts: 3, annotationSnapshotRestored: true, simulatedModelCalls: modelCalls, realModelCalls: 0, cloudWrites: 0, oldSessionsRestored: 0, temporaryPasswordRevoked: true, bulkCreationsRestored: bulkCreationIds.length, commitReceiptLoss: "verified-read-only", packagedCli: Boolean(bundledCli) }))
+    console.log(JSON.stringify({ projectRecovery: "passed", accounts: 3, annotationSnapshotRestored: true, simulatedModelCalls: modelCalls, realModelCalls: 0, cloudWrites: 0, oldSessionsRestored: 0, temporaryPasswordRevoked: true, bulkCreationsRestored: bulkCreationIds.length, deletionMarkerRestored: true, legacy0005ArchiveRestored: true, commitReceiptLoss: "verified-read-only", packagedCli: Boolean(bundledCli) }))
   } finally { client.release() }
 })

@@ -6,7 +6,7 @@ type Table = { columns: readonly Column[]; primary: readonly string[]; unique?: 
 type ForeignKey = readonly [columns: readonly string[], target: string, targetColumns: readonly string[], onDelete?: "c"]
 const timestamp = "timestamp with time zone"
 
-// 固定来自已审核且不可改写的0001—0005，另含迁移运行器拥有的账本。
+// 固定来自已审核且不可改写的0001—0006，另含迁移运行器拥有的账本。
 // 不从数据库、归档、环境或SQL目录推导“应有”结构；新增迁移须同步人工审核此契约。
 const tables: Readonly<Record<string, Table>> = {
   schema_migrations: { columns: [["version", "text"], ["name", "text"], ["sha256", "text"], ["applied_at", timestamp]], primary: ["version"], unique: [["name"]] },
@@ -32,7 +32,7 @@ const tables: Readonly<Record<string, Table>> = {
     primary: ["id"], foreign: [[["actorId"], "user", ["id"]]] },
   provider_request_slots: { columns: [["userId", "text"], ["requestId", "uuid"], ["fingerprint", "text"], ["status", "text"], ["acceptedAt", timestamp], ["deadlineAt", timestamp]],
     primary: ["userId", "requestId"], foreign: [[["userId"], "user", ["id"], "c"]] },
-  creations: { columns: [["ownerId", "text"], ["id", "uuid"], ["title", "text"], ["revision", "integer"], ["nextVersion", "integer"], ["createdAt", timestamp], ["updatedAt", timestamp]],
+  creations: { columns: [["ownerId", "text"], ["id", "uuid"], ["title", "text"], ["revision", "integer"], ["nextVersion", "integer"], ["createdAt", timestamp], ["updatedAt", timestamp], ["deletedAt", timestamp, true]],
     primary: ["ownerId", "id"], foreign: [[["ownerId"], "user", ["id"], "c"]] },
   generation_runs: { columns: [["ownerId", "text"], ["id", "uuid"], ["creationId", "uuid"], ["clientRequestId", "uuid"], ["fingerprint", "text"],
     ["version", "integer"], ["parentVersionId", "uuid", true], ["status", "text"], ["prompt", "text"], ["mappingId", "text"], ["modelLabel", "text"],

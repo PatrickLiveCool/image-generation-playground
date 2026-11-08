@@ -21,6 +21,7 @@ writeFileSync(path.join(dir, "auth/errors.js"), compile(readFileSync(new URL("..
 writeFileSync(path.join(dir, "auth/guards.js"), 'exports.assertSameOrigin = () => {}; exports.accountIdentity = async () => ({user:{id:"synthetic-owner"},sessionId:"synthetic-session",sessionToken:"synthetic-session-token"})')
 writeFileSync(path.join(dir, "private-api.js"), 'exports.privateApiError = require("./auth/errors").accountErrorResponse; exports.privateJson = (body,status=200) => Response.json(body,{status,headers:{"Cache-Control":"private, no-store"}})')
 writeFileSync(path.join(dir, "private-generation.js"), 'exports.executePrivateGeneration = async () => { throw new Error("No live generation in route tests") }')
+writeFileSync(path.join(dir, "private-workspace-service.js"), 'exports.readPrivateRun = async () => { throw new Error("No live database access in route tests") }')
 const route = readFileSync(new URL("../lib/legacy-generation.ts", import.meta.url), "utf8")
 const protectedRoute = readFileSync(new URL("../app/api/generate-image/route.ts", import.meta.url), "utf8")
 writeFileSync(path.join(dir, "protected-route.js"), compile(protectedRoute).replaceAll('require("@/lib/', 'require("./'))
@@ -32,6 +33,7 @@ const network = require(path.join(dir, "provider-network.js"))
 const auth = require(path.join(dir, "auth/guards.js"))
 const errors = require(path.join(dir, "auth/errors.js"))
 const privateGeneration = require(path.join(dir, "private-generation.js"))
+const privateWorkspace = require(path.join(dir, "private-workspace-service.js"))
 const { generateLegacyRequest: POST } = require(path.join(dir, "generate-route.js"))
 const { POST: protectedPOST } = require(path.join(dir, "protected-route.js"))
 after(() => rmSync(dir, { recursive: true, force: true }))
@@ -212,6 +214,11 @@ test("private generation rejects invalid or legacy input before any billable wor
 test("private route accepts only resolved commands and distinguishes saved success from accepted unknown", async context => {
   let calls = 0
   for (const status of ["complete", "unknown"]) {
+    context.mock.method(privateWorkspace, "readPrivateRun", async (identity: any, id: string) => {
+      assert.equal(identity.user.id, "synthetic-owner")
+      assert.equal(id, clientVersionId)
+      return { public: { id, status } }
+    })
     context.mock.method(privateGeneration, "executePrivateGeneration", async (identity: any, input: any) => {
       calls++
       assert.equal(identity.user.id, "synthetic-owner")
@@ -229,4 +236,14 @@ test("private route accepts only resolved commands and distinguishes saved succe
     assert.match(response.headers.get("cache-control")!, /no-store/)
   }
   assert.equal(calls, 2)
+})
+
+test("private generation rechecks access before returning a completed result", async context => {
+  context.mock.method(privateGeneration, "executePrivateGeneration", async () => ({ id: clientVersionId, status: "complete" }))
+  context.mock.method(privateWorkspace, "readPrivateRun", async () => { throw new errors.AccountError("NOT_FOUND", 404, "创作不存在") })
+  const body = new FormData()
+  for (const [key, value] of Object.entries({ creationId, clientRequestId: clientVersionId, mappingId: "selected-mapping", configRevision: "1", prompt: "合成图片", aspectRatio: "square", quality: "auto", mode: "text-to-image" })) body.set(key, value)
+  const response = await protectedPOST(request(body))
+  assert.equal(response.status, 404)
+  assert.equal("run" in await response.json(), false)
 })

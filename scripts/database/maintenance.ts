@@ -17,7 +17,7 @@ export const MAINTENANCE_COMMANDS = ["describe", "preflight", "migrate", "verify
 export type MaintenanceCommand = typeof MAINTENANCE_COMMANDS[number]
 export const MAINTENANCE_CONNECTION_BUDGET = Object.freeze({ applicationProcesses: 2, perApplication: 4, maintenance: 1, total: 9 })
 export type MaintenanceDatabaseContract = {
-  name: "qintopia_image"; schema: "app"; minVersion: "0005"; maxVersion: "0005"
+  name: "qintopia_image"; schema: "app"; minVersion: "0006"; maxVersion: "0006"
   migrations: { name: string; sha256: string }[]
 }
 export type MaintenanceRelease = {
@@ -45,7 +45,7 @@ function exact(value: unknown, keys: string[]): value is Record<string, unknown>
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === [...keys].sort().join(","))
 }
 export function maintenanceDatabaseContract(): MaintenanceDatabaseContract {
-  return { name: "qintopia_image", schema: "app", minVersion: "0005", maxVersion: "0005",
+  return { name: "qintopia_image", schema: "app", minVersion: "0006", maxVersion: "0006",
     migrations: Object.entries(approvedMigrations).sort(([a], [b]) => a.localeCompare(b)).map(([name, sha256]) => ({ name, sha256 })) }
 }
 

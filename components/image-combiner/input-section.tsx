@@ -34,7 +34,7 @@ interface InputSectionProps {
   useGrounding: boolean
   setUseGrounding: (use: boolean) => void
   useUrls: boolean
-  setUseUrls: (use: boolean) => void
+  setUseUrls: (use: boolean, trigger: HTMLButtonElement) => void
   image1Preview: string | null
   image2Preview: string | null
   image1: File | null
@@ -45,7 +45,7 @@ interface InputSectionProps {
   documentFile: File | null
   hasImages: boolean
   onToast: (message: string, type?: "success" | "error") => void
-  onClearAll: () => void
+  onClearAll: (trigger: HTMLButtonElement) => void
   onImageUpload: (file: File, slot: 1 | 2) => Promise<void>
   onDocumentUpload: (file: File) => Promise<void>
   onClearDocument: () => void
@@ -120,7 +120,7 @@ export const InputSection = memo(function InputSection({
       <fieldset disabled={pending} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0 disabled:opacity-70">
         <div className="flex items-center justify-between gap-2">
           <label htmlFor="creation-prompt" className="text-sm font-medium text-gray-300">{editing ? "修改要求" : "提示词"}</label>
-          <Button type="button" onClick={onClearAll} disabled={pending || !hasInput} variant="outline" aria-label="清空输入" title="清空输入和补充参考图，保留已有版本" className="h-7 border-gray-600 bg-transparent px-2 text-xs text-gray-300 hover:bg-gray-700 disabled:opacity-50"><Trash2 className="size-3.5" />清空</Button>
+          <Button type="button" onClick={event => onClearAll(event.currentTarget)} disabled={pending || !hasInput} variant="outline" aria-label="清空本轮输入" title="确认后清空本轮文字、文档、参考图和批注，保留已有版本" className="h-7 border-gray-600 bg-transparent px-2 text-xs text-gray-300 hover:bg-gray-700 disabled:opacity-50"><Trash2 className="size-3.5" />清空本轮输入</Button>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ModelSelector value={selectedMappingId} onChange={id => { if (!pending) setSelectedMappingId(id) }} mappings={mappings} />
@@ -174,8 +174,8 @@ export const InputSection = memo(function InputSection({
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-medium text-gray-300">{hasAnnotations ? "补充参考图" : editing ? "补充参考图（可选）" : "参考图片（可选）"}</p>
             {!hasAnnotations && <div className="inline-flex border border-gray-600 bg-black/50">
-              <button type="button" title="切换输入方式会清空当前参考图" onClick={() => setUseUrls(false)} className={cn("px-2 py-1 text-xs", !useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>文件</button>
-              <button type="button" title="切换输入方式会清空当前参考图" onClick={() => setUseUrls(true)} className={cn("px-2 py-1 text-xs", useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>链接</button>
+              <button type="button" title="已有参考图时，确认后才切换输入方式" onClick={event => setUseUrls(false, event.currentTarget)} className={cn("px-2 py-1 text-xs", !useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>文件</button>
+              <button type="button" title="已有参考图时，确认后才切换输入方式" onClick={event => setUseUrls(true, event.currentTarget)} className={cn("px-2 py-1 text-xs", useUrls ? "bg-white text-black" : "text-gray-300 hover:text-white")}>链接</button>
             </div>}
           </div>
           {hasAnnotations ? referenceCount > 0 ? <div className="space-y-2 rounded border border-amber-300/30 p-2">

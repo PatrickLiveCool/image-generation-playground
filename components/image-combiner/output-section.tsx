@@ -64,6 +64,7 @@ export const OutputSection = memo(function OutputSection({
   useEffect(() => {
     if (pendingGeneration) return
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"][data-state], [role="alertdialog"]')) return
       const target = document.activeElement
       if (event.defaultPrevented || (target instanceof Element && target.closest("[data-annotation-canvas]"))) return
       if (target instanceof HTMLElement && (target.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(target.tagName))) return

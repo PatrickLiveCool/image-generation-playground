@@ -1,20 +1,40 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { createRemoteCreation, listPrivateWorkspace, renameRemoteCreation, PrivateWorkspaceError } from "@/lib/private-workspace-client"
-import type { PrivateCreation, PrivateRun } from "@/lib/private-workspace-types"
+import { createRemoteCreation, readPrivateWorkspaceState, deleteRemoteCreation, restoreRemoteCreation, renameRemoteCreation, PrivateWorkspaceError } from "@/lib/private-workspace-client"
+import type { PrivateCreation, PrivateDeletedCreation, PrivateRun } from "@/lib/private-workspace-types"
 import type { Generation } from "../types"
-import type { CreationDraft, CreativeWorkspace } from "@/lib/creation-types"
+import type { Creation, CreationDraft, CreativeWorkspace } from "@/lib/creation-types"
 import {
   DEFAULT_CREATION_TITLE, WorkspaceConflictError, accountStorageKey, activateCreation, addCreation, completeCreationGeneration, emptyWorkspace,
   EMERGENCY_DRAFT_KEY, emergencyDraftEntry, recoverEmergencyDrafts, serializeEmergencyDrafts, type EmergencyDraftEntry,
   failCreationGeneration, newCreation, patchCreationDraft, readWorkspace,
   renameCreation as renameWorkspaceCreation, restoreWorkspace, selectCreationVersion,
   startCreationGeneration, updateCreationGeneration, workspaceSnapshot, writeWorkspace,
-  mergePrivateWorkspace, applyPrivateRun, markPrivateRunUnknown,
+  mergePrivateWorkspace, applyPrivateRun, markPrivateRunUnknown, removeDeletedCreations,
 } from "@/lib/creative-workspace"
 
-export function useCreativeWorkspace(accountId: string) {
+type DeletionReceipt = { creation: Creation; revision: number; state: "deleted" | "delete-unknown" | "restore-unknown"; error?: string }
+export function creationDeletionBlocked(creation: Creation): string | null {
+  if (creation.creationUnknown) return "创作是否建立尚未确认，请先刷新核对。"
+  // A locally unknown request may never have reached the server. The atomic
+  // DELETE checks all server-side pending/unknown runs and leaves a tombstone
+  // that also rejects a late submission; a local-only unknown must not trap it.
+  if (creation.versions.some(run => run.status === "loading" || ["preparing", "generating", "saving", "save_pending"].includes(run.runStatus ?? ""))) return "请先处理生成中或待补保存的任务，再删除创作。"
+  return null
+}
+function hasLocalInput(creation: Creation) {
+  const draft = creation.draft
+  return Boolean(draft.prompt || draft.documentFile || draft.documentText || draft.image1 || draft.image2 || draft.image1Url || draft.image2Url || Object.values(draft.annotationDrafts ?? {}).some(item => item.snapshot.marks.length))
+}
+const noPendingInput = (_id: string) => false
+function restoreCreationSnapshot(state: CreativeWorkspace, remote: PrivateCreation, snapshot: Creation, hasPendingInput: (id: string) => boolean): CreativeWorkspace {
+  const local = { ...state, creations: [...state.creations.filter(item => item.id !== remote.id), snapshot] }
+  const restored = mergePrivateWorkspace(local, [remote]).creations.find(item => item.id === remote.id)!
+  return addCreation({ ...state, creations: state.creations.filter(item => item.id !== remote.id && !(item.localOnly && !item.versions.length && !hasLocalInput(item) && !hasPendingInput(item.id))) }, restored)
+}
+
+export function useCreativeWorkspace(accountId: string, hasPendingInput: (id: string) => boolean = noPendingInput) {
   const emergencyKey = accountStorageKey(EMERGENCY_DRAFT_KEY, accountId)
   const [workspace, setWorkspace] = useState<CreativeWorkspace>(emptyWorkspace)
   const [ready, setReady] = useState(false)
@@ -35,6 +55,13 @@ export function useCreativeWorkspace(accountId: string) {
   const [remoteBusy, setRemoteBusy] = useState(false)
   const mutationEpoch = useRef(0)
   const refreshSequence = useRef(0)
+  const deletionReceipts = useRef(new Map<string, DeletionReceipt>())
+  const deletionBarriers = useRef(new Map<string, PrivateDeletedCreation>())
+  const lifecycleInFlight = useRef(new Set<string>())
+  const [deletions, setDeletions] = useState<DeletionReceipt[]>([])
+  const [lifecycleBusy, setLifecycleBusy] = useState<string[]>([])
+  const publishDeletions = useCallback(() => { if (mountedRef.current) { setDeletions([...deletionReceipts.current.values()]); setLifecycleBusy([...lifecycleInFlight.current]) } }, [])
+  const lifecycleBlocked = useCallback((id: string) => lifecycleInFlight.current.has(id) || deletionReceipts.current.get(id)?.state === "delete-unknown", [])
 
   const saveEmergencyDrafts = useCallback(() => {
     try {
@@ -98,6 +125,7 @@ export function useCreativeWorkspace(accountId: string) {
     const next = change(previous)
     if (next === previous) return false
     if (persist) mutationEpoch.current++
+    for (const id of emergencyEntriesRef.current.keys()) if (!next.creations.some(item => item.id === id)) emergencyEntriesRef.current.delete(id)
     for (const creation of next.creations) {
       const before = previous.creations.find(item => item.id === creation.id)
       if (!before || before.draftRevision !== creation.draftRevision || before.selectedVersionId !== creation.selectedVersionId) emergencyEntriesRef.current.set(creation.id, emergencyDraftEntry(creation, before, emergencyEntriesRef.current.get(creation.id)))
@@ -116,11 +144,13 @@ export function useCreativeWorkspace(accountId: string) {
     lifetime.current = controller
     const hydrate = async () => {
       try {
-        const [raw, remote] = await Promise.all([readWorkspace(accountId), listPrivateWorkspace(controller.signal)])
+        const [raw, response] = await Promise.all([readWorkspace(accountId), readPrivateWorkspaceState(controller.signal)])
         if (cancelled) return
         const canonical = raw === undefined ? emptyWorkspace() : restoreWorkspace(raw)
-        const recovery = recoverEmergencyDrafts(canonical, sessionStorage.getItem(emergencyKey), remote)
-        let restored = mergePrivateWorkspace(recovery.workspace, remote)
+        const remote = response.creations
+        deletionBarriers.current = new Map(response.deletedCreations.map(item => [item.id, item]))
+        const recovery = recoverEmergencyDrafts(removeDeletedCreations(canonical, response.deletedCreations), sessionStorage.getItem(emergencyKey), remote, response.deletedCreations)
+        let restored = mergePrivateWorkspace(recovery.workspace, remote, { deletedCreations: response.deletedCreations })
         if (!restored.creations.length) restored = addCreation(restored, { ...newCreation(), localOnly: true })
         persistedRevisionRef.current = canonical.revision
         stateRef.current = restored
@@ -158,6 +188,9 @@ export function useCreativeWorkspace(accountId: string) {
   }, [flushSave, saveEmergencyDrafts, accountId, emergencyKey])
 
   const acceptRemote = useCallback((remote: PrivateCreation) => {
+    const barrier = deletionBarriers.current.get(remote.id)
+    if (barrier && barrier.revision >= remote.revision) return
+    if (barrier) deletionBarriers.current.delete(remote.id)
     commit(state => {
       const merged = mergePrivateWorkspace(state, [remote], { preserveConfirmed: true }).creations.find(item => item.id === remote.id)!
       return { ...state, creations: state.creations.some(item => item.id === remote.id)
@@ -170,22 +203,44 @@ export function useCreativeWorkspace(accountId: string) {
     const epoch = mutationEpoch.current
     setRemoteBusy(true)
     try {
-      const remote = await listPrivateWorkspace(signal)
+      const response = await readPrivateWorkspaceState(signal)
+      const remote = response.creations
       if (signal?.aborted || sequence !== refreshSequence.current) return
-      if (epoch !== mutationEpoch.current) {
+      if (epoch !== mutationEpoch.current || lifecycleInFlight.current.size) {
         setRemoteError("刷新期间创作已有新变化，当前内容已保留；需要更新列表时请再次刷新。")
         return
       }
       if (!readyRef.current) { window.location.reload(); return }
+      for (const deleted of response.deletedCreations) {
+        const current = deletionBarriers.current.get(deleted.id)
+        if (!current || current.revision < deleted.revision) deletionBarriers.current.set(deleted.id, deleted)
+      }
+      for (const active of remote) {
+        const barrier = deletionBarriers.current.get(active.id)
+        if (barrier && active.revision > barrier.revision) deletionBarriers.current.delete(active.id)
+      }
       commit(state => {
-        const merged = mergePrivateWorkspace(state, remote, { preserveConfirmed: true })
+        let local = state
+        for (const [id, receipt] of deletionReceipts.current) {
+          const active = remote.find(item => item.id === id)
+          const deleted = response.deletedCreations.find(item => item.id === id)
+          if (active && !deletionBarriers.current.has(id)) {
+            if (receipt.state === "restore-unknown") local = restoreCreationSnapshot(local, active, receipt.creation, hasPendingInput)
+            else if (!local.creations.some(item => item.id === id)) local = { ...local, creations: [...local.creations, receipt.creation] }
+            deletionReceipts.current.delete(id)
+          } else if (deleted) {
+            deletionReceipts.current.set(id, { ...receipt, revision: deleted.revision, state: "deleted", error: receipt.state === "restore-unknown" ? "当前仍处于删除状态，可再次撤销。" : undefined })
+          }
+        }
+        const merged = mergePrivateWorkspace(local, remote.filter(item => !deletionBarriers.current.has(item.id)), { preserveConfirmed: true, deletedCreations: [...deletionBarriers.current.values()] })
         return merged.creations.length ? merged : addCreation(merged, { ...newCreation(), localOnly: true })
       }, true, true)
+      publishDeletions()
       setRemoteError(null)
     } catch (error) {
       if (!signal?.aborted && sequence === refreshSequence.current) setRemoteError(error instanceof Error ? error.message : "刷新失败，草稿已保留。")
     } finally { if (!signal?.aborted && sequence === refreshSequence.current) setRemoteBusy(false) }
-  }, [commit])
+  }, [commit, publishDeletions, hasPendingInput])
   const ensureRemoteCreation = useCallback(async (id: string, submittedPrompt?: string) => {
     const creation = stateRef.current.creations.find(item => item.id === id)
     if (!creation) throw new Error("创作已切换，请重新选择。")
@@ -229,6 +284,7 @@ export function useCreativeWorkspace(accountId: string) {
   }, [commit, ensureRemoteCreation])
   const selectCreation = useCallback((id: string) => { commit(state => activateCreation(state, id), true, true) }, [commit])
   const renameCreation = useCallback(async (id: string, title: string) => {
+    if (lifecycleBlocked(id)) throw new Error("删除操作尚未结束，请先核对状态。")
     const signal = lifetime.current?.signal
     const validated = renameWorkspaceCreation(stateRef.current, id, title).creations.find(item => item.id === id)
     if (!validated) return
@@ -242,15 +298,71 @@ export function useCreativeWorkspace(accountId: string) {
       if (error instanceof PrivateWorkspaceError && error.status === 409) throw new Error("创作已在其他设备更新，当前草稿已保留；请刷新创作后重新命名。")
       throw error
     }
-  }, [acceptRemote, ensureRemoteCreation])
-  const patchDraft = useCallback((id: string, patch: Partial<CreationDraft>) => { commit(state => patchCreationDraft(state, id, patch)) }, [commit])
-  const selectVersion = useCallback((creationId: string, versionId: string) => { commit(state => selectCreationVersion(state, creationId, versionId), true, true) }, [commit])
-  const startGeneration = useCallback((creationId: string, generation: Generation): boolean => commit(state => startCreationGeneration(state, creationId, generation), true, true), [commit])
+  }, [acceptRemote, ensureRemoteCreation, lifecycleBlocked])
+  const deleteCreation = useCallback(async (id: string) => {
+    const initial = stateRef.current.creations.find(item => item.id === id)
+    if (!initial || lifecycleBlocked(id)) throw new Error("请先核对这项创作的操作状态。")
+    const reason = creationDeletionBlocked(initial)
+    if (reason) throw new Error(reason)
+    lifecycleInFlight.current.add(id); mutationEpoch.current++; publishDeletions()
+    const signal = lifetime.current?.signal
+    let submitted = false
+    let snapshot = initial
+    try {
+      await ensureRemoteCreation(id)
+      if (signal?.aborted) return
+      snapshot = stateRef.current.creations.find(item => item.id === id) ?? initial
+      const blocked = creationDeletionBlocked(snapshot)
+      if (blocked) throw new Error(blocked)
+      if (snapshot.remoteRevision === undefined) throw new Error("创作身份尚未确认，请先刷新核对。")
+      submitted = true
+      const deletion = await deleteRemoteCreation(id, snapshot.remoteRevision, signal)
+      if (signal?.aborted) return
+      deletionBarriers.current.set(id, deletion)
+      deletionReceipts.current.set(id, { creation: snapshot, revision: deletion.revision, state: "deleted" })
+      commit(state => {
+        const next = removeDeletedCreations(state, [deletion], true)
+        return next.creations.length ? next : addCreation(next, { ...newCreation(), localOnly: true })
+      }, true, true)
+      setRemoteError(null)
+    } catch (error) {
+      if (signal?.aborted) return
+      if (submitted && (!(error instanceof PrivateWorkspaceError) || error.status === 0 || error.status >= 500)) {
+        deletionReceipts.current.set(id, { creation: snapshot, revision: snapshot.remoteRevision!, state: "delete-unknown" })
+        setRemoteError("删除结果尚未确认，原内容已保留。请刷新创作核对，不要重复提交。")
+      } else throw error
+    } finally { lifecycleInFlight.current.delete(id); mutationEpoch.current++; publishDeletions() }
+  }, [commit, ensureRemoteCreation, lifecycleBlocked, publishDeletions])
+  const restoreCreation = useCallback(async (id: string) => {
+    const receipt = deletionReceipts.current.get(id)
+    if (!receipt || receipt.state !== "deleted" || lifecycleInFlight.current.has(id)) return
+    lifecycleInFlight.current.add(id); mutationEpoch.current++; publishDeletions()
+    const signal = lifetime.current?.signal
+    try {
+      const remote = await restoreRemoteCreation(id, receipt.revision, signal)
+      if (signal?.aborted) return
+      deletionBarriers.current.delete(id)
+      commit(state => restoreCreationSnapshot(state, remote, receipt.creation, hasPendingInput), true, true)
+      deletionReceipts.current.delete(id)
+      setRemoteError(null)
+    } catch (error) {
+      if (signal?.aborted) return
+      const unknown = !(error instanceof PrivateWorkspaceError) || error.status === 0 || error.status >= 500
+      deletionReceipts.current.set(id, { ...receipt, state: unknown ? "restore-unknown" : "deleted", error: unknown ? "撤销结果尚未确认，请刷新创作核对。" : error.message })
+    } finally { lifecycleInFlight.current.delete(id); mutationEpoch.current++; publishDeletions() }
+  }, [commit, publishDeletions, hasPendingInput])
+  const dismissDeletion = useCallback((id: string) => {
+    if (deletionReceipts.current.get(id)?.state !== "deleted" || lifecycleInFlight.current.has(id)) return
+    deletionReceipts.current.delete(id); publishDeletions()
+  }, [publishDeletions])
+  const patchDraft = useCallback((id: string, patch: Partial<CreationDraft>) => { if (!lifecycleBlocked(id)) commit(state => patchCreationDraft(state, id, patch)) }, [commit, lifecycleBlocked])
+  const selectVersion = useCallback((creationId: string, versionId: string) => { if (!lifecycleBlocked(creationId)) commit(state => selectCreationVersion(state, creationId, versionId), true, true) }, [commit, lifecycleBlocked])
+  const startGeneration = useCallback((creationId: string, generation: Generation): boolean => !lifecycleBlocked(creationId) && commit(state => startCreationGeneration(state, creationId, generation), true, true), [commit, lifecycleBlocked])
   // Progress is transient; avoid rewriting large draft File values on every timer tick.
   const updateGeneration = useCallback((creationId: string, id: string, patch: Partial<Generation>) => { commit(state => updateCreationGeneration(state, creationId, id, patch), false) }, [commit])
   const completeGeneration = useCallback((creationId: string, id: string, result: { imageUrl: string }): boolean => commit(state => completeCreationGeneration(state, creationId, id, result), true, true), [commit])
   const failGeneration = useCallback((creationId: string, id: string, message: string): boolean => commit(state => failCreationGeneration(state, creationId, id, message), true, true), [commit])
-  const applyRun = useCallback((run: PrivateRun) => { commit(state => applyPrivateRun(state, run), true, true) }, [commit])
+  const applyRun = useCallback((run: PrivateRun) => { if (!deletionBarriers.current.has(run.creationId)) commit(state => applyPrivateRun(state, run), true, true) }, [commit])
   const markUnknown = useCallback((creationId: string, id: string, message: string) => { commit(state => markPrivateRunUnknown(state, creationId, id, message), true, true) }, [commit])
   const getCreation = useCallback((id: string) => stateRef.current.creations.find(creation => creation.id === id), [])
 
@@ -260,6 +372,8 @@ export function useCreativeWorkspace(accountId: string) {
     activeCreationId: workspace.activeCreationId,
     ready, storageError: remoteError || storageError, remoteBusy, refresh, ensureRemoteCreation, applyRun, markUnknown, createCreation, selectCreation, renameCreation, patchDraft, selectVersion,
     startGeneration, updateGeneration, completeGeneration, failGeneration, getCreation,
+    deleteCreation, restoreCreation, dismissDeletion, lifecycleBusy, lifecycleBlocked,
+    deletions: deletions.map(({ creation, ...receipt }) => ({ ...receipt, id: creation.id, title: creation.title })),
   }
 }
 

@@ -138,7 +138,78 @@ test('built private HTTP flow uses real auth/PG and only memory COS + synthetic 
     assert.equal((await json('/__synthetic_acceptance__/state')).modelCalls,3)
     const fresh = (await json('/api/creations/'+creationId,{session:user})).creation
     assert.equal(fresh.versions.length,3)
-    assert.equal((await json('/api/creations/'+creationId,{session:user,method:'PATCH',body:{revision:fresh.revision,title:'已核对私有创作'}})).creation.title,'已核对私有创作')
+    let latest = (await json('/api/creations/'+creationId,{session:user,method:'PATCH',body:{revision:fresh.revision,title:'已核对私有创作'}})).creation
+    assert.equal(latest.title,'已核对私有创作')
+
+    // 删除是数据库中的访问状态；保持 COS 字节和所有版本，刷新/另一设备以墓碑核对。
+    const beforeDeletion = await json('/__synthetic_acceptance__/state')
+    assert.equal((await request('/api/creations/'+creationId,{session:admin,method:'DELETE',body:{revision:latest.revision}})).status,404)
+    assert.equal((await request('/api/creations/'+creationId+'/restore',{session:admin,body:{revision:latest.revision}})).status,404)
+    const crossSiteDelete = await fetch(base+'/api/creations/'+creationId,{method:'DELETE',headers:{Origin:'https://other.invalid',Cookie:user,'Content-Type':'application/json'},body:JSON.stringify({revision:latest.revision})})
+    assert.equal(crossSiteDelete.status,403)
+    const deletedRevision = latest.revision
+    // 不依赖写回执更新本地，模拟响应丢失后显式读取服务端状态。
+    await json('/api/creations/'+creationId,{session:user,method:'DELETE',body:{revision:deletedRevision}})
+    const deletedState = await json('/api/creations',{session:secondDevice})
+    assert.equal(deletedState.creations.some(item=>item.id===creationId),false)
+    const deletion = deletedState.deletedCreations.find(item=>item.id===creationId)
+    assert.equal(deletion.revision,deletedRevision+1)
+    assert.ok(Number.isSafeInteger(deletion.deletedAt))
+    assert.deepEqual((await json('/api/creations/'+creationId,{session:user,method:'DELETE',body:{revision:deletedRevision}})).deletion,deletion)
+    assert.equal((await json('/api/creations',{session:admin})).deletedCreations.some(item=>item.id===creationId),false)
+    for(const path of ['/api/creations/'+creationId,firstRun.imageUrl,firstRun.imageUrl+'/metadata',documentPath,'/api/runs/'+firstRun.id]) {
+      const denied = await request(path,{session:user})
+      assert.equal(denied.status,404,path)
+      assert.deepEqual(await denied.json(),await (await request('/api/images/'+randomUUID(),{session:user})).json())
+    }
+    assert.equal((await request('/api/runs/'+firstRun.id+'/repair',{session:user,method:'POST'})).status,404)
+    assert.equal((await request('/api/creations',{session:user,body:{id:creationId,title:'不能复活'}})).status,404)
+    assert.equal((await request('/api/generate-image',{session:user,form:first.data})).status,404)
+    assert.equal((await request('/api/generate-image',{session:user,form:generation(creationId,firstRun.id).data})).status,404)
+    assert.equal((await json('/__synthetic_acceptance__/state')).modelCalls,beforeDeletion.modelCalls)
+    assert.equal((await json('/__synthetic_acceptance__/state')).writes,beforeDeletion.writes)
+    latest=(await json('/api/creations/'+creationId+'/restore',{session:user,body:{revision:deletion.revision}})).creation
+    assert.deepEqual(latest.versions.map(run=>run.id),fresh.versions.map(run=>run.id))
+    assert.deepEqual((await json('/api/creations/'+creationId+'/restore',{session:user,body:{revision:deletion.revision}})).creation,latest)
+    assert.equal((await request('/api/creations/'+creationId,{session:user,method:'DELETE',body:{revision:deletedRevision}})).status,409)
+    assert.deepEqual(Buffer.from(await (await request(firstRun.imageUrl,{session:user})).arrayBuffer()),bytes)
+    assert.equal(await (await request(documentPath,{session:user})).text(),'文档内容只出现一次')
+
+    // 图片、文档及元数据的慢读都需在交付前重新验证创作仍未删除。
+    for(const path of [firstRun.imageUrl,documentPath,firstRun.imageUrl+'/metadata']) {
+      const beforeReads=(await json('/__synthetic_acceptance__/state')).reads
+      await json('/__synthetic_acceptance__/fault',{body:{delayNextReadMs:500}})
+      const reading=request(path,{session:user})
+      for(let attempt=0;attempt<50;attempt++) {
+        if((await json('/__synthetic_acceptance__/state')).reads>beforeReads)break
+        if(attempt===49)throw new Error('Asset read did not enter synthetic COS')
+        await sleep(5)
+      }
+      const hidden=(await json('/api/creations/'+creationId,{session:secondDevice,method:'DELETE',body:{revision:latest.revision}})).deletion
+      const denied=await reading
+      assert.equal(denied.status,404,path)
+      assert.equal(denied.headers.get('content-type')?.startsWith('image/'),false)
+      latest=(await json('/api/creations/'+creationId+'/restore',{session:user,body:{revision:hidden.revision}})).creation
+    }
+    assert.equal((await json('/__synthetic_acceptance__/state')).writes,beforeDeletion.writes,'软删除与恢复不写 COS')
+
+    // 另一创作引用此图片时，原创作在慢读期间被删除，不能把已撤销素材继续交给模型。
+    const referenceTarget=randomUUID(), reference=generation(referenceTarget)
+    reference.data.set('image1Url',firstRun.imageUrl)
+    const beforeReferenceReads=(await json('/__synthetic_acceptance__/state')).reads
+    await json('/__synthetic_acceptance__/fault',{body:{delayNextReadMs:500}})
+    const referenceRequest=request('/api/generate-image',{session:user,form:reference.data})
+    for(let attempt=0;attempt<50;attempt++) {
+      if((await json('/__synthetic_acceptance__/state')).reads>beforeReferenceReads)break
+      if(attempt===49)throw new Error('Private reference did not enter synthetic COS')
+      await sleep(5)
+    }
+    const referenceDeletion=(await json('/api/creations/'+creationId,{session:secondDevice,method:'DELETE',body:{revision:latest.revision}})).deletion
+    const rejectedReference=await referenceRequest
+    assert.equal(rejectedReference.status,202)
+    assert.equal((await rejectedReference.json()).run.status,'failed')
+    assert.equal((await json('/__synthetic_acceptance__/state')).modelCalls,3)
+    latest=(await json('/api/creations/'+creationId+'/restore',{session:user,body:{revision:referenceDeletion.revision}})).creation
 
     // 在COS读进行中撤销账号，响应前二次认证必须拒绝交付已经读取的图片字节。
     const beforeReads = (await json('/__synthetic_acceptance__/state')).reads

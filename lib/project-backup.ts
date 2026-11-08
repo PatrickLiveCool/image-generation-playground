@@ -48,7 +48,7 @@ const TABLES = {
     annotationCapabilities: validated(validateAnnotationCapabilities) },
   provider_config_audit: { id: bigint, actorId: id, revision: integer(), action: oneOf("save"), createdAt: date },
   provider_request_slots: { userId: id, requestId: uuid, fingerprint: digest, status: oneOf("active", "finished", "unknown"), acceptedAt: date, deadlineAt: date },
-  creations: { ownerId: id, id: uuid, title: text(60, 1), revision: integer(), nextVersion: integer(), ...timestamp },
+  creations: { ownerId: id, id: uuid, title: text(60, 1), revision: integer(), nextVersion: integer(), ...timestamp, deletedAt: optional(date) },
   generation_runs: { ownerId: id, id: uuid, creationId: uuid, clientRequestId: uuid, fingerprint: digest, version: integer(), parentVersionId: optional(uuid),
     status: oneOf("preparing", "generating", "saving", "complete", "failed", "unknown", "save_pending"), prompt: text(5000), mappingId: text(128, 1), modelLabel: text(256, 1), aspectRatio: text(32, 1), quality: text(32, 1), mode: oneOf("text-to-image", "image-editing"),
     providerBaseUrl: text(2048, 1), providerApiMode: oneOf("images", "chat"), providerModelId: text(256, 1), providerRevision: integer(), manifestKey: text(1024, 1), outputKey: text(1024, 1), outputAssetId: uuid,
@@ -83,7 +83,9 @@ function canonical(value: unknown, depth = 0): string {
 }
 const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex")
 const bytesHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex")
-const migrationList = () => Object.entries(approvedMigrations).sort(([a], [b]) => a.localeCompare(b)).map(([name, sha256]) => ({ name, sha256 }))
+type BackupDatabaseVersion = "0005" | "0006"
+const migrationList = (version: BackupDatabaseVersion = "0006") => Object.entries(approvedMigrations).sort(([a], [b]) => a.localeCompare(b))
+  .filter(([name]) => name.slice(0, 4) <= version).map(([name, sha256]) => ({ name, sha256 }))
 function validateSecrets(value: unknown): asserts value is ProjectRecoverySecrets {
   object(value, ["BETTER_AUTH_SECRET", "PROVIDER_CONFIG_KEY", "ASSET_ACCESS_SECRET"])
   requireSafe(text(4096, 32)(value.BETTER_AUTH_SECRET) && text(4096, 32)(value.ASSET_ACCESS_SECRET), "BACKUP_SECRET_INVALID")
@@ -106,13 +108,16 @@ export function projectBackupStorage(environment: NodeJS.ProcessEnv): ProjectBac
   validateStorage(storage)
   return storage
 }
-function validateRelease(value: unknown) {
+function validateRelease(value: unknown): BackupDatabaseVersion {
   object(value, ["schema", "application", "version", "revision", "platform", "builtAt", "browserWorkspaceSchema", "assetCapabilityVersion", "databaseMode", "assetAccessProtocol", "database"])
   try { validateReleaseIdentity(value) } catch { throw new ProjectBackupError("BACKUP_RELEASE_INVALID") }
   const release = value as Row
   requireSafe(release.schema === 2 && release.browserWorkspaceSchema === 2 && release.databaseMode === "postgresql" && release.assetAccessProtocol === "account-private-v1", "BACKUP_RELEASE_INVALID")
   const database = release.database as Row
-  requireSafe(database?.name === "qintopia_image" && database.schema === "app" && database.minVersion === "0005" && database.maxVersion === "0005" && canonical(database.migrations) === canonical(migrationList()), "BACKUP_RELEASE_INVALID")
+  const version = database?.maxVersion
+  requireSafe((version === "0005" || version === "0006") && database?.name === "qintopia_image" && database.schema === "app" &&
+    database.minVersion === version && canonical(database.migrations) === canonical(migrationList(version)), "BACKUP_RELEASE_INVALID")
+  return version
 }
 function index(rows: Row[], key: (row: Row) => string) {
   const entries = rows.map(row => [key(row), row] as const)
@@ -121,11 +126,13 @@ function index(rows: Row[], key: (row: Row) => string) {
 }
 const compound = (...items: unknown[]) => JSON.stringify(items)
 const prefix = (row: Row) => `image-playground/private/v1/${createHash("sha256").update(String(row.ownerId)).digest("hex")}/${row.creationId}/${row.id}`
-function validateRecords(tables: Records, secrets: ProjectRecoverySecrets) {
+function validateRecords(tables: Records, secrets: ProjectRecoverySecrets, version: BackupDatabaseVersion) {
   object(tables, PROJECT_BACKUP_TABLES)
   let total = 0
   for (const table of PROJECT_BACKUP_TABLES) {
-    const rows = tables[table], fields = TABLES[table] as Record<string, Check>
+    const rows = tables[table]
+    // 旧归档必须严格保持其原始字段集合，不能先补字段后再验证或重算摘要。
+    const fields = Object.fromEntries(Object.entries(TABLES[table]).filter(([column]) => version !== "0005" || table !== "creations" || column !== "deletedAt")) as Record<string, Check>
     requireSafe(Array.isArray(rows) && (total += rows.length) <= 100_000)
     for (const row of rows) { object(row, Object.keys(fields)); for (const [column, check] of Object.entries(fields)) requireSafe(check(row[column])) }
   }
@@ -223,11 +230,12 @@ export function validateProjectBackupPayload(value: unknown): ProjectBackupPaylo
   object(value, ["schema", "application", "database", "schemaName", "createdAt", "release", "migrations", "storage", "secrets", "tables", "contentSha256"])
   requireSafe(value.schema === 1 && value.application === "qintopia-image" && value.database === "qintopia_image" && value.schemaName === "app" && date(value.createdAt))
   requireSafe(Date.parse(String(value.createdAt)) <= Date.now() + 300_000 && digest(value.contentSha256))
-  validateRelease(value.release); validateSecrets(value.secrets); validateStorage(value.storage)
-  requireSafe(canonical(value.migrations) === canonical(migrationList()))
+  const version = validateRelease(value.release)
+  validateSecrets(value.secrets); validateStorage(value.storage)
+  requireSafe(canonical(value.migrations) === canonical(migrationList(version)))
   const { contentSha256, ...content } = value
   requireSafe(hash(content) === contentSha256, "BACKUP_DIGEST_INVALID")
-  validateRecords(value.tables as Records, value.secrets)
+  validateRecords(value.tables as Records, value.secrets, version)
   return value as ProjectBackupPayload
 }
 function base64(value: unknown, length?: number): Buffer {
@@ -289,6 +297,8 @@ async function readRecords(client: DatabaseInspectionClient): Promise<Records> {
 }
 function normalizedRestoreTables(payload: ProjectBackupPayload): Records {
   const tables = structuredClone(payload.tables)
+  // 仅对已经认证并按0005原结构验证的归档补齐新增列。0006必须携带原删除状态。
+  if ((payload.release.database as Row).maxVersion === "0005") for (const row of tables.creations) row.deletedAt = null
   for (const row of tables.generation_runs) if (["preparing", "generating", "saving"].includes(String(row.status))) row.status = "unknown"
   for (const row of tables.provider_request_slots) if (row.status === "active") row.status = "unknown"
   for (const row of tables.user) if (row.mustChangePassword) {
@@ -302,7 +312,8 @@ function tableDigest(tables: Records) {
   return hash(Object.fromEntries(PROJECT_BACKUP_TABLES.map(table => [table, [...tables[table]].sort((a, b) => canonical(a).localeCompare(canonical(b)))])))
 }
 export async function exportProjectBackup(client: DatabaseInspectionClient, configuration: DatabaseConfiguration, release: Record<string, unknown>, secrets: ProjectRecoverySecrets, key: Uint8Array, storage: ProjectBackupStorage): Promise<Buffer> {
-  validateRelease(release); validateSecrets(secrets); validateStorage(storage); requireSafe(key.length === 32, "BACKUP_KEY_INVALID")
+  requireSafe(validateRelease(release) === "0006", "BACKUP_RELEASE_INVALID")
+  validateSecrets(secrets); validateStorage(storage); requireSafe(key.length === 32, "BACKUP_KEY_INVALID")
   await verifyTarget(client, configuration)
   await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
   try {

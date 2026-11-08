@@ -10,4 +10,5 @@ export const approvedMigrations: Readonly<Record<string, string>> = Object.freez
   "0003-provider-admission.sql": "3a3543454f5fe1b1856dfc180af20bac15f9b896d7764b1fa8506ea3d588d0bd",
   "0004-private-workspace.sql": "1c87968b7c023e46834897472d24b83248646e9014159f3f0c8a83738130fc2f",
   "0005-image-annotations.sql": "7f1fed8f92c018cb76a10e9ee819fbcf620e77df6ad8146f7068d8e7a6fc90ca",
+  "0006-creation-soft-delete.sql": "478aecc2b7e0f40cb619eb7f90aa1a43eede4568857d3a36bca665521bd04066",
 })
