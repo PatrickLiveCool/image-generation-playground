@@ -26,7 +26,7 @@ async function type(label: string, text: string) { await flush(() => { const fie
 function box(x: number, y: number, width: number, height: number) { return { x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() { return {} } } }
 
 async function mountEditor(t: TestContext, containerWidth = 300, initial?: AnnotationDraft) {
-  let latest: AnnotationDraft | undefined, submissions = 0
+  let latest: AnnotationDraft | undefined, submissions = 0, completions = 0
   t.mock.method(win.HTMLElement.prototype, "getBoundingClientRect", function (this: InstanceType<typeof win.HTMLElement>) { return box(0, 0, containerWidth, 400) })
   t.mock.method(win.SVGElement.prototype, "getBoundingClientRect", function (this: InstanceType<typeof win.SVGElement>) { return box(0, 125, 300, 150) })
   Object.defineProperty(win.SVGElement.prototype, "setPointerCapture", { configurable: true, value: () => {} })
@@ -36,17 +36,18 @@ async function mountEditor(t: TestContext, containerWidth = 300, initial?: Annot
     latest = draft
     const editor = useAnnotationEditor(draft, setDraft, base)
     const [tool, setTool] = useState<"rectangle" | "lasso" | "brush" | null>(null)
-    return <><AnnotationTools editor={editor} disabledReason={disabled ? "任务正在处理" : undefined} tool={tool} setTool={setTool} addCenter={() => addCenterAnnotation(editor)} /><AnnotationList editor={editor} onSubmit={() => submissions++} /><AnnotationCanvas editor={editor} tool={tool} disabled={disabled} onSubmit={() => submissions++} /></>
+    const onComplete = () => { completions++; setTool(null) }
+    return <div onKeyDown={event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey || event.shiftKey)) submissions++ }}><AnnotationTools editor={editor} disabledReason={disabled ? "任务正在处理" : undefined} tool={tool} setTool={setTool} addCenter={() => addCenterAnnotation(editor)} /><AnnotationList editor={editor} onComplete={onComplete} /><AnnotationCanvas editor={editor} tool={tool} disabled={disabled} onComplete={onComplete} /></div>
   }
   const container = win.document.createElement("div"); win.document.body.append(container)
   const root = createRoot(container as unknown as HTMLElement)
   const render = async (disabled = false) => { await act(async () => root.render(<Probe disabled={disabled} />)) }
   t.after(async () => { await act(async () => root.unmount()); container.remove() })
   await render()
-  return { state: () => latest!, submissions: () => submissions, render }
+  return { state: () => latest!, submissions: () => submissions, completions: () => completions, render }
 }
 
-test("center region shares instructions with the floating editor, keeps stable numbers through delete/undo, and submits by keyboard", async t => {
+test("center region shares instructions, keeps stable numbers through delete/undo, and completes without submitting", async t => {
   const view = await mountEditor(t)
   await flush(() => button("添加中心区域").click())
   assert.equal(view.state().snapshot.marks[0].number, 1)
@@ -61,10 +62,105 @@ test("center region shares instructions with the floating editor, keeps stable n
   assert.deepEqual(view.state().snapshot.marks.map(mark => mark.number), [1, 2])
   await flush(() => button("添加中心区域").click())
   assert.deepEqual(view.state().snapshot.marks.map(mark => mark.number), [1, 2, 3])
+  await type("批注 3 的说明", "确认第三个区域")
+  const beforeComplete = structuredClone(view.state())
   const input = win.document.querySelector('textarea[aria-label="批注 3 的说明"]')!
   await flush(() => input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true })))
-  assert.equal(view.submissions(), 1)
+  assert.equal(view.completions(), 1)
+  assert.equal(view.submissions(), 0)
+  assert.deepEqual(view.state(), beforeComplete, "completion adds no persisted flag and need not complete the other empty region")
+  assert.equal(win.document.querySelector('textarea[aria-label="图上批注 3 的说明"]'), null)
+  assert.equal(win.document.activeElement?.textContent, "定位批注 3")
+  assert.match(win.document.body.textContent, /批注 3 已录入/)
+  assert.equal(win.document.body.textContent.includes("已保存"), false)
   assert.equal(win.document.querySelector('[data-annotation-canvas] button[type="submit"]'), null)
+})
+
+test("Done validates the current instruction, closes either editor and retains the shared content on reopening", async t => {
+  const view = await mountEditor(t)
+  await flush(() => button("添加中心区域").click())
+  const list = win.document.querySelector('section[aria-label="区域批注"]')!
+  const listDone = () => [...list.querySelectorAll("button")].find(item => item.textContent === "完成")!
+  await flush(() => listDone().click())
+  assert.equal(view.completions(), 0)
+  assert.match(list.textContent, /请填写批注 1 的修改说明/)
+  assert.equal(win.document.activeElement?.getAttribute("aria-label"), "批注 1 的说明")
+  await type("批注 1 的说明", "本条已完整填写")
+  await flush(() => listDone().click())
+  assert.equal(view.completions(), 1)
+  assert.equal(win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]'), null)
+  assert.equal(list.querySelector('textarea')!.value, "本条已完整填写")
+  await flush(() => button("定位批注 1").click())
+  const floating = win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]')! as InstanceType<typeof win.HTMLTextAreaElement>
+  assert.equal(floating.value, "本条已完整填写")
+  await type("图上批注 1 的说明", "重新修改后的说明")
+  const floatingDone = [...floating.parentElement!.querySelectorAll("button")].find(item => item.textContent === "完成")!
+  await flush(() => floatingDone.click())
+  assert.equal(view.completions(), 2)
+  assert.equal(view.state().snapshot.marks[0].instruction, "重新修改后的说明")
+  assert.equal(view.submissions(), 0)
+})
+
+test("completing the first of many annotations leaves feedback beside that item and announces it once above the canvas", async t => {
+  const view = await mountEditor(t)
+  for (let index = 0; index < 4; index++) await flush(() => button("添加中心区域").click())
+  await flush(() => button("定位批注 1").click())
+  await type("图上批注 1 的说明", "完成第一条，其他批注保留")
+  const floating = win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]')!
+  const done = [...floating.parentElement!.querySelectorAll("button")].find(item => item.textContent === "完成")!
+  const beforeComplete = structuredClone(view.state())
+  await flush(() => done.click())
+  const firstItem = win.document.querySelector('textarea[aria-label="批注 1 的说明"]')!.parentElement!
+  assert.match(firstItem.textContent, /批注 1 已录入/)
+  assert.equal(win.document.querySelector('textarea[aria-label="批注 4 的说明"]')!.parentElement!.textContent.includes("批注 1 已录入"), false)
+  assert.equal(win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]'), null)
+  const toolbar = win.document.querySelector('[aria-label="绘制批注工具"]')!.parentElement!
+  assert.match(toolbar.textContent, /批注 1 已录入/)
+  assert.equal([...win.document.querySelectorAll('[role="status"], [aria-live="polite"]')].filter(item => item.textContent === "批注 1 已录入").length, 1)
+  assert.deepEqual(view.state(), beforeComplete, "targeted feedback is transient and never changes the annotation snapshot")
+  assert.equal(view.completions(), 1)
+  assert.equal(view.submissions(), 0)
+  await type("批注 1 的说明", "继续编辑第一条")
+  assert.equal(firstItem.textContent.includes("批注 1 已录入"), false, "editing clears the previous completion feedback")
+})
+
+test("both instruction fields preserve newlines and IME while Ctrl/Cmd+Enter only completes locally", async t => {
+  const view = await mountEditor(t)
+  await flush(() => button("添加中心区域").click())
+  await type("批注 1 的说明", "输入中文说明")
+  for (const label of ["批注 1 的说明", "图上批注 1 的说明"]) {
+    const field = win.document.querySelector(`textarea[aria-label="${label}"]`)!
+    for (const options of [{}, { shiftKey: true }, { ctrlKey: true, isComposing: true }, { metaKey: true, isComposing: true }]) {
+      const event = new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...options })
+      await flush(() => field.dispatchEvent(event))
+      assert.equal(event.defaultPrevented, false)
+    }
+    const ime = new win.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })
+    Object.defineProperty(ime, "keyCode", { value: 229 })
+    await flush(() => field.dispatchEvent(ime))
+    assert.equal(ime.defaultPrevented, false)
+  }
+  assert.equal(view.completions(), 0)
+  assert.equal(view.submissions(), 0)
+  const floating = win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]')!
+  const done = new win.KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })
+  await flush(() => floating.dispatchEvent(done))
+  assert.equal(done.defaultPrevented, true)
+  assert.equal(view.completions(), 1)
+  assert.equal(view.submissions(), 0)
+})
+
+test("editing another list instruction keeps typing focus while selecting the corresponding region", async t => {
+  const view = await mountEditor(t)
+  await flush(() => button("添加中心区域").click())
+  await flush(() => button("添加中心区域").click())
+  const first = win.document.querySelector('textarea[aria-label="批注 1 的说明"]')! as InstanceType<typeof win.HTMLTextAreaElement>
+  await flush(() => first.focus())
+  assert.equal(win.document.activeElement, first)
+  assert.ok(win.document.querySelector('textarea[aria-label="图上批注 1 的说明"]'))
+  await type("批注 1 的说明", "键盘焦点保留在当前输入框")
+  assert.equal(view.state().snapshot.marks[0].instruction, "键盘焦点保留在当前输入框")
+  assert.equal(view.state().snapshot.marks[1].instruction, "")
 })
 
 test("self-intersecting and repeated-winding lassos use the same even-odd regions in editor and historical preview", async t => {

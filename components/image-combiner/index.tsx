@@ -4,6 +4,7 @@ import dynamic from "next/dynamic"
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ClipboardEvent, DragEvent, ReactElement } from "react"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { Button } from "@/components/ui/button"
 import { resolveModelMapping } from "@/lib/model-mappings"
 import { prepareReference } from "@/lib/prepare-reference"
 import { isDocumentFile, validateDocumentFile } from "@/lib/document-context"
@@ -31,6 +32,10 @@ const FullscreenViewer = lazy(() => import("./fullscreen-viewer").then(mod => ({
 const noop = () => {}
 
 type Toast = (message: string, type?: "success" | "error") => void
+
+function hasCreationAnnotations(creation: Creation) {
+  return Boolean(creation.selectedVersionId && creation.draft.annotationDrafts?.[creation.selectedVersionId]?.snapshot.marks.length)
+}
 
 function useFilePreview(file: File | null) {
   const [preview, setPreview] = useState("")
@@ -94,6 +99,7 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
   const upload = useCallback(async (creationId: string, file: File, slot: 1 | 2) => {
     const creation = getCreation(creationId)
     if (!creation || creation.versions.some(version => version.status === "loading")) return
+    if (hasCreationAnnotations(creation)) { showToast("批注修改期间暂停添加补充参考图。", "error"); return }
     if (creation.selectedVersionId && slot === 2) { showToast("修改当前图片时，只能添加一张补充参考图。", "error"); return }
     const key = `${creationId}:${slot}`
     const token = Symbol(key)
@@ -105,6 +111,7 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
       // The creation and slot are captured before conversion, even if the user switches away.
       const latest = getCreation(creationId)
       if (!latest || latest.versions.some(version => version.status === "loading")) return
+      if (hasCreationAnnotations(latest)) { showToast("已开始批注，本次参考图未加入。", "error"); return }
       patchDraft(creationId, {
         ...(latest.draft.useUrls ? { image1Url: "", image2Url: "", image1: null, image2: null } : {}),
         useUrls: false,
@@ -159,7 +166,7 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
         </header>
         {(api.error || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.error}</div>}
         {workspace.ready && workspace.activeCreation ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-white/10 bg-black/75 p-2 lg:flex-row lg:overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-pb-44 rounded-md border border-white/10 bg-black/75 p-2 pb-44 lg:flex-row lg:overflow-hidden lg:scroll-pb-0 lg:pb-2">
             <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
             <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} onCheckStatus={generation.checkStatus} />
           </div>
@@ -221,13 +228,22 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   const annotationDisabledReason = !base ? undefined : pending ? "当前任务正在处理，暂不能绘制或切换基础版本。" : !imageLoaded ? "基准图尚未加载完成，暂不能绘制。" : metadata.error || (!metadata.metadata ? "正在读取原图尺寸与方向…" : annotationDraft && (["assetId", "width", "height", "orientation", "pages"] as const).some(key => annotationDraft.snapshot.image[key] !== metadata.metadata![key]) ? "批注与原图信息不匹配，原草稿已保留。" : undefined)
   useEffect(() => { setAnnotationTool(null) }, [base?.id])
   const isMobile = useIsMobile()
-  const referenceCount = draft.useUrls ? Number(Boolean(draft.image1Url.trim())) + Number(Boolean(draft.image2Url.trim())) : Number(Boolean(draft.image1)) + Number(Boolean(draft.image2))
-  let annotationSubmissionReason: string | undefined
-  if (hasAnnotations) {
-    if (annotationDisabledReason) annotationSubmissionReason = annotationDisabledReason
-    else { try { buildCreationRequest({ creation, catalog: api.catalog }) } catch (error) { annotationSubmissionReason = error instanceof Error ? error.message : "请检查批注。" } }
-  }
-  const canGenerate = api.isConfigured && Boolean(selectedMapping) && Boolean(draft.prompt.trim() || hasAnnotations) && !pending && !uploading && (!base || referenceCount <= 1) && !annotationSubmissionReason
+  const referenceCount = Number(Boolean(draft.image1 || draft.image1Url.trim())) + Number(Boolean(draft.image2 || draft.image2Url.trim()))
+  const incompleteAnnotation = annotationDraft?.snapshot.marks.find(mark => !mark.instruction.trim())
+  const referenceConflict = hasAnnotations && referenceCount > 0
+  let submissionReason: string | undefined
+  if (pending) submissionReason = "正在生成，可切换到其他创作；本轮输入会保留。"
+  else if (uploading) submissionReason = "正在处理上传内容，请稍候。"
+  else if (creation.creationUnknown) submissionReason = "创作是否建立尚未确认，请先刷新创作核对。"
+  else if (!api.ready) submissionReason = "正在读取模型配置…"
+  else if (!api.isConfigured) submissionReason = "当前暂无可用模型，请联系管理员完成配置。"
+  else if (!selectedMapping) submissionReason = "请选择可用模型。"
+  else if (hasAnnotations && annotationDisabledReason) submissionReason = annotationDisabledReason
+  else if (incompleteAnnotation) submissionReason = `批注 ${incompleteAnnotation.number} 尚未填写说明。`
+  else if (referenceConflict) submissionReason = "请移除补充参考图后生成，批注和修改要求会保留。"
+  else if (!hasAnnotations && !draft.prompt.trim()) submissionReason = "请填写生成要求。"
+  else { try { buildCreationRequest({ creation, catalog: api.catalog }) } catch (error) { submissionReason = error instanceof Error ? error.message : "请检查输入内容。" } }
+  const canGenerate = !submissionReason
   const currentMode = base || referenceCount ? "image-editing" : "text-to-image"
   const generatedImage = base?.imageUrl ? { url: base.imageUrl, prompt: base.prompt } : null
   const actions = useImageActions({ isMobile: Boolean(isMobile), currentMode, onToast })
@@ -270,6 +286,14 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
     return () => document.removeEventListener("keydown", handler, true)
   }, [actions, generatedImage, navigate])
   const clearImage = (slot: 1 | 2) => { if (!pending) onClearImage(creation.id, slot) }
+  const clearReferences = () => { clearImage(1); clearImage(2) }
+  const locateIncompleteAnnotation = () => {
+    if (!incompleteAnnotation) return
+    annotationEditor.select(incompleteAnnotation.id)
+    const field = document.getElementById(`annotation-instruction-${incompleteAnnotation.id}`)
+    field?.scrollIntoView?.({ block: "center", behavior: "smooth" })
+    field?.focus()
+  }
   const clearAll = () => {
     if (pending) return
     onClearImage(creation.id, 1); onClearImage(creation.id, 2); onClearDocument()
@@ -278,11 +302,14 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
     promptRef.current?.focus()
   }
   const changeMode = (useUrls: boolean) => {
-    if (pending || useUrls === draft.useUrls) return
+    if (pending || hasAnnotations || useUrls === draft.useUrls) return
     onClearImage(creation.id, 1); onClearImage(creation.id, 2)
     patch({ useUrls })
   }
-  const upload = (file: File, slot: 1 | 2) => onUpload(creation.id, file, slot)
+  const upload = (file: File, slot: 1 | 2) => {
+    if (hasAnnotations) { onToast("批注修改期间暂停添加补充参考图。", "error"); return Promise.resolve() }
+    return onUpload(creation.id, file, slot)
+  }
   const uploadPasted = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (pending) return
     const file = Array.from(event.clipboardData.items).find(item => item.type.startsWith("image/"))?.getAsFile()
@@ -303,7 +330,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   }
 
   return (
-    <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
+    <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_auto]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
       <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-3 lg:overflow-y-auto lg:pr-2">
         {creation.creationUnknown && <p role="alert" className="text-xs text-amber-300">创作是否建立尚未确认，请先刷新创作核对，输入已保留。</p>}
         {api.ready && !api.error && draft.selectedMappingId && !selectedMapping && <p role="alert" className="mb-2 text-xs text-amber-300">之前选择的模型已被移除，请重新选择模型。</p>}
@@ -313,22 +340,30 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
           thinkingLevel="minimal" setThinkingLevel={noop} resolution="1K" setResolution={noop} useGrounding={false} setUseGrounding={noop}
           useUrls={draft.useUrls} setUseUrls={changeMode} image1Preview={image1Preview} image2Preview={image2Preview} image1={draft.image1} image1Url={draft.image1Url} image2Url={draft.image2Url}
           documentName={draft.documentName ?? ""} documentText={draft.documentText ?? ""} documentFile={draft.documentFile ?? null} onDocumentUpload={onDocumentUpload} onClearDocument={onClearDocument}
-          canGenerate={canGenerate} hasImages={Boolean(base || referenceCount)} onGenerate={() => onGenerate(creation.id)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
-          onUrlChange={(url, slot) => { clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
-          onKeyDown={event => { if ((event.shiftKey || event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
-          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending} submitLabel={uploading ? "正在处理上传内容…" : base ? `修改 V${base.version ?? 1}` : "生成图片"}
-          hasAnnotations={hasAnnotations} annotationContent={<AnnotationList editor={annotationEditor} reason={annotationSubmissionReason} onSubmit={() => { if (canGenerate) onGenerate(creation.id) }} />} />
-        {uploading && <p role="status" className="text-xs text-gray-400">正在处理上传内容，可切换创作；完成后会放回当前创作。</p>}
+          hasImages={Boolean(base || referenceCount)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
+          onUrlChange={(url, slot) => { if (pending || hasAnnotations) return; clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
+          onKeyDown={event => { if (!event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && (event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
+          onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending}
+          referenceCount={referenceCount} onClearReferences={clearReferences} hasAnnotations={hasAnnotations} annotationContent={<AnnotationList editor={annotationEditor} onComplete={() => setAnnotationTool(null)} />} />
         <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} onCheckStatus={id => void onCheckStatus(creation.id, id)} onRepair={id => void onCheckStatus(creation.id, id, true)} onDownloadDocument={document => void actions.downloadDocument(document)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
       </div>
-      <div className="order-2 h-[420px] min-w-0 lg:order-none lg:h-auto lg:min-h-0">
+      <div className="order-2 h-[420px] min-w-0 lg:order-none lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:h-auto lg:min-h-0">
         <OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}
           imageLoaded={imageLoaded} setImageLoaded={setImageLoaded} onCancelGeneration={id => onCancel(creation.id, id)} onDeleteGeneration={noop}
           onOpenFullscreen={() => generatedImage && actions.openFullscreen(generatedImage.url)} onCopy={() => void actions.copyImageToClipboard(generatedImage)} onDownload={() => void actions.downloadImage(generatedImage)}
           onOpenInNewTab={() => actions.openImageInNewTab(generatedImage)} onImageReady={noop} onImageError={noop}
           annotationTools={base && <AnnotationTools editor={annotationEditor} disabledReason={annotationDisabledReason} tool={annotationTool} setTool={setAnnotationTool} addCenter={() => { if (!annotationDisabledReason) addCenterAnnotation(annotationEditor) }} onRetryMetadata={metadata.error ? metadata.retry : undefined} />}
-          annotationOverlay={annotationDraft && <AnnotationCanvas editor={annotationEditor} tool={annotationTool} disabled={Boolean(annotationDisabledReason)} onSubmit={() => { if (canGenerate) onGenerate(creation.id) }} />} />
+          annotationOverlay={annotationDraft && <AnnotationCanvas editor={annotationEditor} tool={annotationTool} disabled={Boolean(annotationDisabledReason)} onComplete={() => setAnnotationTool(null)} />} />
       </div>
+      <section aria-label="生成操作" className="fixed inset-x-0 bottom-0 z-30 space-y-2 border-t border-white/20 bg-black p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:static lg:col-start-1 lg:row-start-2 lg:rounded-md lg:border lg:p-3">
+        {base && <p className="text-xs text-gray-300">基于 V{base.version ?? 1}{hasAnnotations ? ` · ${annotationDraft!.snapshot.marks.length} 条批注` : ""}</p>}
+        {submissionReason && <p id="generation-submission-reason" role="status" className="text-xs leading-relaxed text-amber-200">{submissionReason}</p>}
+        {!pending && !uploading && <div className="flex gap-3">
+          {incompleteAnnotation && <button type="button" onClick={locateIncompleteAnnotation} className="text-xs text-sky-200 underline underline-offset-4">去填写</button>}
+          {referenceConflict && <button type="button" onClick={clearReferences} className="text-xs text-sky-200 underline underline-offset-4">移除参考图</button>}
+        </div>}
+        <Button type="button" onClick={() => onGenerate(creation.id)} disabled={!canGenerate} aria-describedby={submissionReason ? "generation-submission-reason" : undefined} className="h-11 w-full bg-white text-sm font-semibold text-black hover:bg-gray-200">{pending ? "生成中…" : uploading ? "正在处理上传内容…" : base ? "生成新版本" : "生成图片"}</Button>
+      </section>
       <Suspense fallback={null}>{actions.showFullscreen && actions.fullscreenImageUrl && <FullscreenViewer imageUrl={actions.fullscreenImageUrl} onClose={actions.closeFullscreen} onNavigate={navigate} canNavigate={!pending && fullscreenIsVersion && completed.length > 1} />}</Suspense>
     </div>
   )

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { KeyboardEvent, PointerEvent } from "react"
-import { annotationDisplayBounds, orientedImageSize, toDisplayPoint, type AnnotationDraft, type AnnotationMark, type AnnotationPoint, type AnnotationSnapshot } from "@/lib/image-annotations"
+import { annotationDisplayBounds, orientedImageSize, toDisplayPoint, validateAnnotationSnapshot, type AnnotationDraft, type AnnotationMark, type AnnotationPoint, type AnnotationSnapshot } from "@/lib/image-annotations"
 import { containImageRect, drawnAnnotation, nudgeAnnotation, replaceAnnotationMarks } from "@/lib/annotation-draft"
 
 type MarkType = AnnotationMark["geometry"]["type"]
@@ -12,16 +12,19 @@ export interface AnnotationEditorController {
   select: (id: string | null) => void
   change: (marks: AnnotationMark[], nextNumber?: number) => void
   instruction: (id: string, value: string) => void
+  complete: (id: string) => boolean
   remove: (id: string) => void
   undo: () => void
   canUndo: boolean
   message: string
+  messageTargetId: string | null
   report: (message: string) => void
 }
 
 export function useAnnotationEditor(draft: AnnotationDraft | undefined, save: (value: AnnotationDraft) => void, identity: string): AnnotationEditorController {
   const [selectedId, select] = useState<string | null>(null)
-  const [message, report] = useState("")
+  const [feedback, setFeedback] = useState<{ message: string; targetId: string | null }>({ message: "", targetId: null })
+  const report = (message: string) => setFeedback({ message, targetId: null })
   const [undoStack, setUndoStack] = useState<AnnotationMark[][]>([])
   useEffect(() => { select(null); setUndoStack([]); report("") }, [identity])
   const change = (marks: AnnotationMark[], nextNumber?: number) => {
@@ -29,11 +32,21 @@ export function useAnnotationEditor(draft: AnnotationDraft | undefined, save: (v
     try {
       const next = replaceAnnotationMarks(draft, marks, nextNumber)
       setUndoStack(stack => [...stack.slice(-39), draft.snapshot.marks])
-      save(next); report("批注已保存在当前基础版本的草稿中。")
+      save(next); report("批注内容已更新。")
     } catch (error) { report(error instanceof Error ? error.message : "批注无效，已保留原草稿。") }
   }
-  return { draft, selectedId, select, change, report, message, canUndo: undoStack.length > 0,
+  return { draft, selectedId, select, change, report, message: feedback.message, messageTargetId: feedback.targetId, canUndo: undoStack.length > 0,
     instruction: (id, value) => change(draft?.snapshot.marks.map(mark => mark.id === id ? { ...mark, instruction: value } : mark) ?? []),
+    complete: id => {
+      const mark = draft?.snapshot.marks.find(item => item.id === id)
+      if (!draft || !mark) return false
+      try {
+        if (!mark.instruction.trim()) throw new Error(`请填写批注 ${mark.number} 的修改说明。`)
+        validateAnnotationSnapshot({ ...draft.snapshot, marks: [mark] })
+        select(null); setFeedback({ message: `批注 ${mark.number} 已录入`, targetId: id })
+        return true
+      } catch (error) { select(id); report(error instanceof Error ? error.message : "请检查本条批注。"); return false }
+    },
     remove: id => { change(draft?.snapshot.marks.filter(mark => mark.id !== id) ?? []); select(null) },
     undo: () => {
       const previous = undoStack.at(-1)
@@ -45,16 +58,34 @@ export function useAnnotationEditor(draft: AnnotationDraft | undefined, save: (v
 }
 
 const buttonClass = "rounded border border-white/25 px-2 py-1 text-xs text-gray-200 hover:bg-white/10 disabled:opacity-40"
-export function AnnotationList({ editor, reason, onSubmit }: { editor: AnnotationEditorController; reason?: string; onSubmit: () => void }) {
+function completeAnnotation(editor: AnnotationEditorController, id: string, onComplete?: () => void) {
+  if (!editor.complete(id)) return false
+  onComplete?.()
+  document.getElementById(`annotation-locate-${id}`)?.focus()
+  return true
+}
+
+function instructionKeyDown(event: KeyboardEvent<HTMLTextAreaElement>, complete: () => void) {
+  if (event.key !== "Enter") return
+  // A local editing gesture must never reach an enclosing generation shortcut.
+  event.stopPropagation()
+  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+  if (event.metaKey || event.ctrlKey) { event.preventDefault(); complete() }
+}
+
+export function AnnotationList({ editor, reason, onComplete }: { editor: AnnotationEditorController; reason?: string; onComplete?: () => void }) {
   const marks = editor.draft?.snapshot.marks ?? []
   if (!marks.length) return null
   return <section aria-label="区域批注" className="min-w-0 space-y-2 rounded-md border border-sky-300/30 p-3">
     <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-sky-100">区域批注 · {marks.length}/20</p><button type="button" onClick={editor.undo} disabled={!editor.canUndo} className={buttonClass}>撤销批注</button></div>
     <p className="text-xs text-gray-400">与图上浮框同步；整体修改要求可留空。</p>
     {marks.map(mark => <div key={mark.id} className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2"><button type="button" className={buttonClass} aria-pressed={editor.selectedId === mark.id} onClick={() => editor.select(mark.id)}>定位批注 {mark.number}</button><button type="button" className={buttonClass} onClick={() => editor.remove(mark.id)} aria-label={`删除批注 ${mark.number}`}>删除</button></div>
-      <textarea aria-label={`批注 ${mark.number} 的说明`} value={mark.instruction} onChange={event => editor.instruction(mark.id, event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey || event.shiftKey) && event.key === "Enter") { event.preventDefault(); onSubmit() } }} className="min-h-16 w-full resize-y rounded border border-white/25 bg-black p-2 text-sm text-white" placeholder="说明这一区域要如何修改（最多 500 字）" />
+      <div className="flex items-center justify-between gap-2"><button id={`annotation-locate-${mark.id}`} type="button" className={buttonClass} aria-pressed={editor.selectedId === mark.id} onClick={() => editor.select(mark.id)}>定位批注 {mark.number}</button><button type="button" className={buttonClass} onClick={() => editor.remove(mark.id)} aria-label={`删除批注 ${mark.number}`}>删除</button></div>
+      <textarea id={`annotation-instruction-${mark.id}`} aria-label={`批注 ${mark.number} 的说明`} value={mark.instruction} onFocus={() => editor.select(mark.id)} onChange={event => editor.instruction(mark.id, event.target.value)} onKeyDown={event => instructionKeyDown(event, () => { completeAnnotation(editor, mark.id, onComplete) })} className="min-h-16 w-full resize-y rounded border border-white/25 bg-black p-2 text-sm text-white" placeholder="说明这一区域要如何修改（最多 500 字）" />
+      {editor.selectedId === mark.id && <div className="flex justify-end"><button type="button" className={buttonClass} onClick={() => { if (!completeAnnotation(editor, mark.id, onComplete)) document.getElementById(`annotation-instruction-${mark.id}`)?.focus() }}>完成</button></div>}
+      {editor.messageTargetId === mark.id && <p className="text-xs leading-relaxed text-sky-100">{editor.message}</p>}
     </div>)}
+    {editor.message && !editor.messageTargetId && <p role="status" aria-live="polite" className="text-xs leading-relaxed text-sky-100">{editor.message}</p>}
     {reason && <p role="alert" className="text-xs leading-relaxed text-amber-200">{reason}</p>}
   </section>
 }
@@ -97,7 +128,7 @@ export function AnnotationTools({ editor, disabledReason, tool, setTool, addCent
       {onRetryMetadata && <button type="button" onClick={onRetryMetadata} className={buttonClass}>重新读取图片信息</button>}
       {tool && <button type="button" onClick={() => setTool(null)} className={buttonClass}>结束绘制</button>}
     </div>
-    <p role="status" aria-live="polite" className="text-[11px] leading-relaxed text-gray-400">{disabledReason || editor.message || "选择工具后在图上标记。选中区域后方向键移动，Shift + 方向键调整，Enter 编辑说明，Delete 删除。"}</p>
+    <p role="status" aria-live="polite" className="text-[11px] leading-relaxed text-gray-400">{disabledReason || ((editor.messageTargetId || !editor.draft?.snapshot.marks.length) && editor.message) || "选择工具后在图上标记。选中区域后方向键移动，Shift + 方向键调整，Enter 编辑说明，Delete 删除。"}</p>
   </div>
 }
 
@@ -109,7 +140,7 @@ export function addCenterAnnotation(editor: AnnotationEditorController) {
   editor.change([...editor.draft.snapshot.marks, mark], mark.number + 1); editor.select(id)
 }
 
-export function AnnotationCanvas({ editor, tool, disabled, onSubmit }: { editor: AnnotationEditorController; tool: MarkType | null; disabled: boolean; onSubmit: () => void }) {
+export function AnnotationCanvas({ editor, tool, disabled, onComplete }: { editor: AnnotationEditorController; tool: MarkType | null; disabled: boolean; onComplete?: () => void }) {
   const container = useRef<HTMLDivElement>(null)
   const floatingInput = useRef<HTMLTextAreaElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -124,7 +155,7 @@ export function AnnotationCanvas({ editor, tool, disabled, onSubmit }: { editor:
   }, [])
   useEffect(() => { gesture.current = null; setPreview(null) }, [disabled, editor.draft?.snapshot.baseVersionId])
   useEffect(() => {
-    if (!editor.selectedId) return
+    if (!editor.selectedId || document.activeElement?.tagName === "TEXTAREA") return
     const mark = container.current?.querySelector<SVGElement>(`[data-annotation-id="${editor.selectedId}"]`)
     // This makes center insertion and “定位批注” immediately keyboard-operable.
     ;(mark as unknown as HTMLElement | null)?.focus?.()
@@ -134,6 +165,7 @@ export function AnnotationCanvas({ editor, tool, disabled, onSubmit }: { editor:
   const image = snapshot.image, display = orientedImageSize(image), box = containImageRect(size, display)
   const selected = snapshot.marks.find(mark => mark.id === editor.selectedId)
   const bounds = selected ? annotationDisplayBounds(selected, image) : null
+  const floatingTop = bounds ? Math.max(8, Math.min(size.height - 184, box.top + bounds.y * box.scale - 176)) : 8
   const point = (event: PointerEvent<SVGSVGElement>): AnnotationPoint | null => {
     const rect = event.currentTarget.getBoundingClientRect()
     if (!rect.width || !rect.height) return null
@@ -170,10 +202,11 @@ export function AnnotationCanvas({ editor, tool, disabled, onSubmit }: { editor:
       onPointerUp={finish} onPointerCancel={() => { gesture.current = null; setPreview(null) }}>
       {[...snapshot.marks, ...(preview ? [preview] : [])].map(mark => { const label = annotationDisplayBounds(mark, image); return <g key={mark.id} data-annotation-id={mark.id} role="button" tabIndex={mark.id === "preview" ? -1 : 0} aria-label={`选择批注 ${mark.number}`} aria-pressed={editor.selectedId === mark.id} className="pointer-events-auto outline-none" onFocus={() => editor.select(mark.id)} onClick={event => { event.stopPropagation(); if (!tool || disabled) editor.select(mark.id) }} onKeyDown={event => keyDown(event, mark)}><MarkShape mark={mark} image={image} selected={editor.selectedId === mark.id} /><g transform={`translate(${label.x} ${label.y}) scale(${1 / (box.scale || 1)})`}><rect width="25" height="23" rx="4" fill="#0369a1" /><text x="12.5" y="16" fill="white" fontSize="14" textAnchor="middle">{mark.number}</text></g></g> })}
     </svg>}
-    {selected && bounds && box.width > 0 && <div className="pointer-events-auto absolute z-20 w-64 max-w-[calc(100%-16px)] rounded-md border border-sky-300/50 bg-black/95 p-2 shadow-xl" style={{ left: Math.max(8, Math.min(size.width - Math.min(256, size.width - 16) - 8, box.left + bounds.x * box.scale)), top: Math.max(8, box.top + bounds.y * box.scale - 112), width: Math.min(256, size.width - 16) }}>
+    {selected && bounds && box.width > 0 && <div className="pointer-events-auto absolute z-20 w-64 max-w-[calc(100%-16px)] overflow-y-auto rounded-md border border-sky-300/50 bg-black/95 p-2 shadow-xl" style={{ left: Math.max(8, Math.min(size.width - Math.min(256, size.width - 16) - 8, box.left + bounds.x * box.scale)), top: floatingTop, maxHeight: Math.max(0, size.height - floatingTop - 8), width: Math.min(256, size.width - 16) }}>
       <div className="mb-1 flex items-center justify-between gap-2 text-xs text-sky-100"><span>批注 {selected.number}</span><button type="button" onClick={() => editor.select(null)} aria-label="关闭批注浮框" className="px-2">×</button></div>
-      <textarea ref={floatingInput} aria-label={`图上批注 ${selected.number} 的说明`} value={selected.instruction} onChange={event => editor.instruction(selected.id, event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey || event.shiftKey) && event.key === "Enter") { event.preventDefault(); onSubmit() } }} className="h-14 w-full resize-none rounded border border-white/25 bg-black p-1 text-sm text-white" placeholder="描述此区域的修改" />
-      <button type="button" onClick={() => editor.remove(selected.id)} className="text-xs text-gray-400">删除此批注</button>
+      <textarea ref={floatingInput} aria-label={`图上批注 ${selected.number} 的说明`} value={selected.instruction} onChange={event => editor.instruction(selected.id, event.target.value)} onKeyDown={event => instructionKeyDown(event, () => { completeAnnotation(editor, selected.id, onComplete) })} className="h-14 w-full resize-none rounded border border-white/25 bg-black p-1 text-sm text-white" placeholder="描述此区域的修改" />
+      {editor.message && <p className="mt-1 text-xs text-sky-100">{editor.message}</p>}
+      <div className="mt-1 flex items-center justify-between gap-2"><button type="button" onClick={() => editor.remove(selected.id)} className="text-xs text-gray-400">删除此批注</button><button type="button" className={buttonClass} onClick={() => { if (!completeAnnotation(editor, selected.id, onComplete)) floatingInput.current?.focus() }}>完成</button></div>
     </div>}
   </div>
 }
