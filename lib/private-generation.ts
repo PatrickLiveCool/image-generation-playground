@@ -81,6 +81,7 @@ export async function executePrivateGeneration(identity: AccountIdentity, input:
       const base = await dep.service.readPrivateBase(identity, input.command.creationId, input.command.parentVersionId)
       if (!base) throw new AccountError("BASE_VERSION_UNAVAILABLE", 409, "所选基准版本不可用，请重新选择。")
       const original = await validatePrivateImage((await readVerifiedPrivateAsset(base, dep.store)).bytes)
+      await dep.service.readPrivateAsset(identity, base.id, "image")
       images.push(original)
       if (snapshot) {
         if (base.id !== snapshot.image.assetId || original.pages !== 1 || (["width", "height", "orientation", "pages"] as const).some(key => original[key] !== snapshot.image[key])) throw new AccountError("ANNOTATION_INPUT_INVALID", 400, "批注坐标对应的原图尺寸、方向或版本已经不匹配，请重新加载基准。")
@@ -99,6 +100,8 @@ export async function executePrivateGeneration(identity: AccountIdentity, input:
         if (reference.source.startsWith("/api/images/")) {
           const asset = await dep.service.readPrivateAsset(identity, reference.source.slice("/api/images/".length), "image")
           image = imageBytes((await readVerifiedPrivateAsset(asset, dep.store)).bytes)
+          // A reference may belong to another creation deleted during the COS read.
+          await dep.service.readPrivateAsset(identity, asset.id, "image")
         } else image = await dep.readSource(reference.source, signal)
       }
       if (image.bytes.length > MAX_REFERENCE_BYTES) throw new AccountError("INVALID_INPUT", 400, "单张补充参考图不能超过 10 MB。")
@@ -280,6 +283,7 @@ export async function repairPrivateGeneration(identity: AccountIdentity, runId: 
     if (manifest.output && (output.sha256 !== manifest.output.sha256 || output.byteLength !== manifest.output.byteLength || output.mediaType !== manifest.output.mediaType)) throw new Error("output mismatch")
   } catch { throw new AccountError("RUN_OUTPUT_UNCONFIRMED", 409, "尚未核对到完整输出，结果仍不明；没有重新调用模型。") }
   await dep.reauthorize(identity)
+  await dep.service.readPrivateRun(identity, runId)
   manifest.output = output
   manifest.status = "complete"
   manifest.updatedAt = Date.now()

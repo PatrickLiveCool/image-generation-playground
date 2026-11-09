@@ -465,7 +465,8 @@ test("rename conflict uses the server revision and keeps the proposed name and d
     throw new Error(`Unexpected offline request: ${path}`)
   })
   await mount(t, account)
-  await flush(() => (win.document.querySelector('[aria-label="重命名当前创作"]') as InstanceType<typeof win.HTMLButtonElement>).click())
+  await flush(() => (win.document.querySelector('[aria-label="创作操作 服务端创作"]') as InstanceType<typeof win.HTMLButtonElement>).dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true, button: 0 })))
+  await flush(() => (win.document.querySelector('[role="menuitem"]') as InstanceType<typeof win.HTMLElement>).click())
   await flush(() => { const field = win.document.querySelector("#creation-name")!; Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(field, "新的名称"); field.dispatchEvent(new win.Event("input", { bubbles: true })) })
   await flush(() => win.document.querySelector("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })))
   assert.deepEqual(patchBody, { revision: 7, title: "新的名称" })
@@ -763,4 +764,136 @@ test("emergency draft recovers against the authenticated server base when no IDB
   assert.equal(restored.current().activeCreation?.draft.prompt, "首次设备未落盘的文字")
   assert.equal(restored.current().activeCreation?.selectedVersionId, rid)
   assert.match(sessionStorage.getItem(key) ?? "", /首次设备未落盘的文字/)
+})
+
+test("clearing a round requires confirmation and cancel or Escape preserves every input", async t => {
+  const account = "confirm-clear-input", annotations = filledAnnotations([1])
+  const versions = [run(), run({ id: "99999999-9999-4999-8999-999999999999", version: 2 })]
+  const state = mergePrivateWorkspace(emptyWorkspace(), [remote(versions)])
+  state.creations[0].selectedVersionId = rid
+  Object.assign(state.creations[0].draft, { prompt: "不要误清这段文字", documentName: "背景.txt", documentText: "保留背景内容", documentFile: new File(["保留背景内容"], "背景.txt", { type: "text/plain" }), useUrls: true, image1Url: asset, annotationDrafts: { [rid]: annotations } })
+  await writeWorkspace(state, 0, "confirm-clear-seed", account)
+  let postCount = 0, imageActionReads = 0
+  t.mock.method(globalThis, "fetch", async (path: string, init?: RequestInit) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote(versions)] })
+    if (path.endsWith("/metadata")) return Response.json(annotations.snapshot.image)
+    if (path === asset) { imageActionReads++; return new Response(null, { status: 503 }) }
+    if (init?.method === "POST") postCount++
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, account); await loadBaseImage()
+  for (const dismiss of ["cancel", "escape"]) {
+    await flush(() => button("清空本轮输入").click())
+    assert.match(win.document.querySelector('[role="alertdialog"]')?.textContent ?? "", /背景文档、参考图和未提交批注/)
+    assert.equal(prompt().value, "不要误清这段文字")
+    for (const key of ["f", "c", "d", "ArrowRight", "ArrowLeft"]) {
+      await flush(() => button("取消").dispatchEvent(new win.KeyboardEvent("keydown", { key, metaKey: key === "c" || key === "d", bubbles: true, cancelable: true })))
+      assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
+    }
+    assert.equal(win.document.querySelector('[aria-label="全屏查看图片"]'), null)
+    assert.equal(imageActionReads, 0)
+    assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
+    if (dismiss === "cancel") await flush(() => button("取消").click())
+    else await flush(() => win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })))
+    await eventually(() => assert.equal(win.document.querySelector('[role="alertdialog"]'), null))
+    await eventually(() => assert.ok(win.document.activeElement === button("清空本轮输入"), "cancel returns focus to clear trigger"))
+    assert.equal(prompt().value, "不要误清这段文字")
+    assert.equal(annotationField(1).value, "修改区域 1")
+    assert.ok(win.document.querySelector('[aria-label="移除背景文档"]'))
+    assert.ok(win.document.querySelector('[aria-label="查看补充参考图 1"]'))
+  }
+  await flush(() => button("清空本轮输入").click())
+  await flush(() => button("确认清空").click())
+  await eventually(() => assert.ok(win.document.activeElement === prompt(), "focus returns to prompt"))
+  assert.equal(prompt().value, "")
+  assert.equal(win.document.querySelector('[aria-label="移除背景文档"]'), null)
+  assert.equal(win.document.querySelectorAll('textarea[aria-label^="批注 "]').length, 0)
+  assert.equal(win.document.querySelector('[aria-label="查看补充参考图 1"]'), null)
+  assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
+  await act(async () => { await delay(240) })
+  const saved = restoreWorkspace(await readWorkspace(account)).creations[0]
+  assert.equal(saved.selectedVersionId, rid); assert.equal(saved.versions.length, 2)
+  assert.equal(saved.draft.documentFile, null); assert.equal(saved.draft.documentText, ""); assert.equal(saved.draft.image1Url, "")
+  assert.equal(saved.draft.selectedMappingId, "mapping-a"); assert.equal(saved.draft.aspectRatio, "3:2"); assert.equal(saved.draft.quality, "high")
+  assert.equal(postCount, 0)
+})
+
+for (const useUrls of [false, true]) test(`changing ${useUrls ? "URL" : "file"} reference mode waits for confirmation and only clears references`, async t => {
+  const account = `confirm-input-mode-${useUrls}`, state = mergePrivateWorkspace(emptyWorkspace(), [remote()])
+  const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "参考.png", { type: "image/png" })
+  Object.assign(state.creations[0].draft, { prompt: "保留文字", documentName: "背景.txt", documentText: "保留文档", useUrls, image1: useUrls ? null : file, image1Url: useUrls ? asset : "" })
+  await writeWorkspace(state, 0, "confirm-mode-seed", account)
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path.endsWith("/metadata")) return Response.json(filledAnnotations([1]).snapshot.image)
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, account)
+  const target = useUrls ? "文件" : "链接"
+  await flush(() => button(target).click())
+  assert.ok(win.document.querySelector('[role="alertdialog"]'))
+  await flush(() => button("取消").click())
+  await eventually(() => assert.ok(win.document.activeElement === button(target), "focus returns to reference mode trigger"))
+  assert.equal(prompt().value, "保留文字")
+  let saved = restoreWorkspace(await readWorkspace(account)).creations[0].draft
+  assert.equal(saved.useUrls, useUrls)
+  if (useUrls) assert.equal(saved.image1Url, asset)
+  else {
+    assert.equal(saved.image1?.type, file.type); assert.equal(saved.image1?.size, file.size)
+    assert.deepEqual(new Uint8Array(await saved.image1!.arrayBuffer()), new Uint8Array(await file.arrayBuffer()))
+  }
+  await flush(() => button(target).click())
+  await flush(() => button("移除参考图并切换").click())
+  await act(async () => { await delay(240) })
+  saved = restoreWorkspace(await readWorkspace(account)).creations[0].draft
+  assert.equal(saved.useUrls, !useUrls); assert.equal(saved.image1, null); assert.equal(saved.image1Url, "")
+  assert.equal(saved.prompt, "保留文字"); assert.equal(saved.documentText, "保留文档")
+  assert.ok(win.document.querySelector('[aria-label="选择 V1"][aria-pressed="true"]'))
+  // Once empty, switching the input control does not require another confirmation.
+  await flush(() => button(useUrls ? "链接" : "文件").click())
+  assert.equal(win.document.querySelector('[role="alertdialog"]'), null)
+})
+
+
+for (const ingress of ["paste", "drop"] as const) test(`${ingress} from URL mode confirms reference replacement before reading the file`, async t => {
+  const account = `confirm-reference-${ingress}`, state = mergePrivateWorkspace(emptyWorkspace(), [remote()])
+  Object.assign(state.creations[0].draft, { prompt: "保留文字", documentText: "保留文档", useUrls: true, image1Url: asset })
+  await writeWorkspace(state, 0, "ingress-seed", account)
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    const common = baseFetch(path); if (common) return common
+    if (path === "/api/creations") return Response.json({ creations: [remote()] })
+    if (path.endsWith("/metadata")) return Response.json(filledAnnotations([1]).snapshot.image)
+    throw new Error(`Unexpected offline request: ${path}`)
+  })
+  await mount(t, account)
+  const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "pasted.png", { type: "image/png" })
+  let reads = 0
+  const originalSlice = file.slice.bind(file)
+  t.mock.method(file, "slice", (...args: Parameters<File["slice"]>) => { reads++; return originalSlice(...args) })
+  const submitFile = async () => {
+    await flush(() => {
+      prompt().focus()
+      const event = new win.Event(ingress, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, ingress === "paste" ? "clipboardData" : "dataTransfer", { value: ingress === "paste" ? { items: [{ type: file.type, getAsFile: () => file }] } : { files: [file], types: ["Files"] } })
+      prompt().dispatchEvent(event)
+    })
+    assert.ok(win.document.querySelector('[role="alertdialog"]'))
+  }
+  await submitFile()
+  assert.equal(reads, 0)
+  await flush(() => button("取消").click())
+  await eventually(() => assert.ok(win.document.activeElement === prompt(), "focus returns to prompt"))
+  let saved = restoreWorkspace(await readWorkspace(account)).creations[0]
+  assert.equal(saved.draft.useUrls, true); assert.equal(saved.draft.image1Url, asset); assert.equal(saved.draft.image1, null)
+  assert.equal(reads, 0)
+  await submitFile()
+  await flush(() => button("移除参考图并切换").click())
+  await eventually(() => assert.ok(reads > 0))
+  await act(async () => { await delay(240) })
+  saved = restoreWorkspace(await readWorkspace(account)).creations[0]
+  assert.equal(saved.draft.useUrls, false); assert.equal(saved.draft.image1Url, "")
+  assert.deepEqual(new Uint8Array(await saved.draft.image1!.arrayBuffer()), new Uint8Array(await file.arrayBuffer()))
+  assert.equal(saved.draft.prompt, "保留文字"); assert.equal(saved.draft.documentText, "保留文档"); assert.equal(saved.selectedVersionId, rid)
 })

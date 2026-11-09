@@ -11,14 +11,14 @@ import { withTransaction } from "./database"
 import { acquireGenerationSlotInTransaction } from "./generation-admission"
 import { assertPrivateKey, privateRunPrefix } from "./private-cos"
 import type { AcceptedPrivateRun, PrivateAssetRecord, PrivateRunRecord, RunCommand } from "./private-workspace-records"
-import type { PrivateCreation, PrivateRun, PrivateRunStatus } from "./private-workspace-types"
+import type { PrivateCreation, PrivateDeletedCreation, PrivateRun, PrivateRunStatus, PrivateWorkspaceResponse } from "./private-workspace-types"
 import { resolveGenerationProviderInTransaction } from "./provider-configuration"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HASH = /^[0-9a-f]{64}$/
 const FAILURE_CODES = new Set(["INPUT_SAVE_FAILED", "GENERATION_FAILED", "GENERATION_UNKNOWN", "OUTPUT_SAVE_FAILED", "MANIFEST_SAVE_FAILED", "METADATA_SAVE_FAILED", "REQUEST_ABORTED", "REPAIR_OUTPUT_MISSING", "REPAIR_INVALID_OUTPUT", "BASE_VERSION_UNAVAILABLE", "REFERENCE_INVALID", "ACCOUNT_UNAVAILABLE", "MODEL_OUTPUT_INVALID", "PROVIDER_AUTH_REJECTED", "PROVIDER_REQUEST_REJECTED", "PROVIDER_RATE_LIMITED", "PROVIDER_UPSTREAM_FAILED", "INPUT_READ_FAILED", "ANNOTATION_INPUT_INVALID"])
 const RUN_STATUSES = new Set<PrivateRunStatus>(["preparing", "generating", "saving", "complete", "failed", "unknown", "save_pending"])
-type CreationRow = { id: string; title: string; revision: number; nextVersion: number; createdAt: Date; updatedAt: Date }
+type CreationRow = { id: string; title: string; revision: number; nextVersion: number; createdAt: Date; updatedAt: Date; deletedAt: Date | null }
 type RunRow = Omit<PrivateRun, "createdAt" | "updatedAt" | "imageUrl" | "document" | "failureCode"> & {
   ownerId: string; clientRequestId: string; fingerprint: string; createdAt: Date; updatedAt: Date; deadlineAt: Date
   manifestKey: string; outputKey: string; outputAssetId: string; failureCode: string | null
@@ -27,7 +27,7 @@ type RunRow = Omit<PrivateRun, "createdAt" | "updatedAt" | "imageUrl" | "documen
   documentAssetId?: string | null; documentName?: string | null
 }
 const runSelect = `SELECT r.*, c.revision AS "creationRevision", d.id AS "documentAssetId", d.name AS "documentName"
-  FROM app.generation_runs r JOIN app.creations c ON c."ownerId"=r."ownerId" AND c.id=r."creationId"
+  FROM app.generation_runs r JOIN app.creations c ON c."ownerId"=r."ownerId" AND c.id=r."creationId" AND c."deletedAt" IS NULL
   LEFT JOIN app.private_assets d ON d."ownerId"=r."ownerId" AND d."runId"=r.id AND d.kind='document'`
 
 function identifier(value: unknown): string {
@@ -46,6 +46,29 @@ function exactBody(body: unknown, required: string[], optional: string[] = []): 
 function title(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(value)) throw invalidInput("创作名称须为 1–60 个字符。")
   return value.trim()
+}
+function expectedRevision(body: unknown): number {
+  const { revision } = exactBody(body, ["revision"])
+  if (!Number.isSafeInteger(revision) || (revision as number) < 1 || (revision as number) >= 2_147_483_647) throw invalidInput("创作版本无效。")
+  return revision as number
+}
+function revisionConflict(): never {
+  throw new AccountError("CREATION_REVISION_CONFLICT", 409, "创作已在其他设备更新，请刷新后重试。")
+}
+function deletionView(row: CreationRow): PrivateDeletedCreation {
+  return { id: row.id, revision: row.revision, deletedAt: row.deletedAt!.getTime() }
+}
+async function lockCreation(client: PoolClient, ownerId: string, id: string): Promise<CreationRow> {
+  const { rows: [row] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2 FOR UPDATE', [ownerId, id])
+  if (!row) return notFound()
+  return row
+}
+/** Internal completion and deletion use the same creation → run lock order. */
+async function lockActiveCreationForRun(client: PoolClient, ownerId: string, runId: string): Promise<void> {
+  const { rows: [row] } = await client.query<CreationRow>(`SELECT c.* FROM app.creations c
+    JOIN app.generation_runs r ON r."ownerId"=c."ownerId" AND r."creationId"=c.id
+    WHERE r."ownerId"=$1 AND r.id=$2 FOR UPDATE OF c`, [ownerId, runId])
+  if (!row || row.deletedAt !== null) return notFound()
 }
 function capabilityVerification(row: RunRow) {
   return { sha256: (value: string) => createHash("sha256").update(value, "utf8").digest("hex"), mappingId: row.mappingId, configurationRevision: row.providerRevision }
@@ -74,15 +97,21 @@ async function creationView(client: PoolClient, ownerId: string, row: CreationRo
   return { id: row.id, title: row.title, revision: row.revision, createdAt: row.createdAt.getTime(), updatedAt: row.updatedAt.getTime(), versions: rows.map(run => toRecord(run).public) }
 }
 
-export async function listPrivateCreations(headers: Headers): Promise<PrivateCreation[]> {
+export async function listPrivateWorkspaceState(headers: Headers): Promise<PrivateWorkspaceResponse> {
   const identity = await accountIdentity(headers)
   return withTransaction(async client => {
     await recheckAccount(client, identity)
     const { rows } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 ORDER BY "updatedAt" DESC,id', [identity.user.id])
-    const creations: PrivateCreation[] = []
-    for (const row of rows) creations.push(await creationView(client, identity.user.id, row))
-    return creations
+    const creations: PrivateCreation[] = [], deletedCreations: PrivateDeletedCreation[] = []
+    for (const row of rows) {
+      if (row.deletedAt !== null) deletedCreations.push(deletionView(row))
+      else creations.push(await creationView(client, identity.user.id, row))
+    }
+    return { creations, deletedCreations }
   })
+}
+export async function listPrivateCreations(headers: Headers): Promise<PrivateCreation[]> {
+  return (await listPrivateWorkspaceState(headers)).creations
 }
 export async function createPrivateCreation(headers: Headers, body: unknown): Promise<PrivateCreation> {
   const identity = await accountIdentity(headers)
@@ -92,6 +121,7 @@ export async function createPrivateCreation(headers: Headers, body: unknown): Pr
     await recheckAccount(client, identity)
     await client.query('INSERT INTO app.creations ("ownerId",id,title) VALUES ($1,$2,$3) ON CONFLICT ("ownerId",id) DO NOTHING', [identity.user.id, id, name])
     const { rows: [row] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2', [identity.user.id, id])
+    if (row.deletedAt !== null) return notFound()
     return creationView(client, identity.user.id, row)
   })
 }
@@ -100,7 +130,7 @@ export async function readPrivateCreation(headers: Headers, id: string): Promise
   return withTransaction(async client => {
     await recheckAccount(client, identity)
     const { rows: [row] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2', [identity.user.id, creationId])
-    if (!row) return notFound()
+    if (!row || row.deletedAt !== null) return notFound()
     return creationView(client, identity.user.id, row)
   })
 }
@@ -111,9 +141,37 @@ export async function renamePrivateCreation(headers: Headers, id: string, body: 
   return withTransaction(async client => {
     await recheckAccount(client, identity)
     const { rows: [current] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2 FOR UPDATE', [identity.user.id, creationId])
-    if (!current) return notFound()
+    if (!current || current.deletedAt !== null) return notFound()
     if (current.revision !== input.revision) throw new AccountError("CREATION_REVISION_CONFLICT", 409, "创作已在其他设备更新，请刷新后重试。")
     const { rows: [row] } = await client.query<CreationRow>('UPDATE app.creations SET title=$3,revision=revision+1,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2 RETURNING *', [identity.user.id, creationId, name])
+    return creationView(client, identity.user.id, row)
+  })
+}
+
+export async function deletePrivateCreation(headers: Headers, id: string, body: unknown): Promise<PrivateDeletedCreation> {
+  const identity = await accountIdentity(headers), creationId = lookupIdentifier(id), revision = expectedRevision(body)
+  return withTransaction(async client => {
+    await recheckAccount(client, identity)
+    const current = await lockCreation(client, identity.user.id, creationId)
+    // Only an unchanged result of this expected revision is a safe duplicate.
+    // A stale DELETE arriving after restore must never delete the creation again.
+    if (current.deletedAt !== null && current.revision === revision + 1) return deletionView(current)
+    if (current.revision !== revision || current.deletedAt !== null) return revisionConflict()
+    const pending = await client.query('SELECT 1 FROM app.generation_runs WHERE "ownerId"=$1 AND "creationId"=$2 AND status NOT IN (\'complete\',\'failed\') LIMIT 1', [identity.user.id, creationId])
+    if (pending.rowCount) throw new AccountError("CREATION_HAS_PENDING_RUNS", 409, "创作仍有生成中、结果未知或待补保存的任务，请先处理任务后再删除。")
+    const { rows: [row] } = await client.query<CreationRow>('UPDATE app.creations SET "deletedAt"=statement_timestamp(),revision=revision+1,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2 RETURNING *', [identity.user.id, creationId])
+    return deletionView(row)
+  })
+}
+
+export async function restorePrivateCreation(headers: Headers, id: string, body: unknown): Promise<PrivateCreation> {
+  const identity = await accountIdentity(headers), creationId = lookupIdentifier(id), revision = expectedRevision(body)
+  return withTransaction(async client => {
+    await recheckAccount(client, identity)
+    const current = await lockCreation(client, identity.user.id, creationId)
+    if (current.deletedAt === null && current.revision === revision + 1) return creationView(client, identity.user.id, current)
+    if (current.revision !== revision || current.deletedAt === null) return revisionConflict()
+    const { rows: [row] } = await client.query<CreationRow>('UPDATE app.creations SET "deletedAt"=NULL,revision=revision+1,"updatedAt"=statement_timestamp() WHERE "ownerId"=$1 AND id=$2 RETURNING *', [identity.user.id, creationId])
     return creationView(client, identity.user.id, row)
   })
 }
@@ -137,7 +195,8 @@ function validateCommand(command: RunCommand): RunCommand {
   return normalized
 }
 async function baseInTransaction(client: PoolClient, ownerId: string, creationId: string, parentId: string): Promise<PrivateAssetRecord> {
-  const { rows: [asset] } = await client.query<PrivateAssetRecord>(`SELECT a.* FROM app.generation_runs r JOIN app.private_assets a ON a."ownerId"=r."ownerId" AND a.id=r."outputAssetId" AND a."runId"=r.id AND a."creationId"=r."creationId" AND a.key=r."outputKey" AND a.kind='image'
+  const { rows: [asset] } = await client.query<PrivateAssetRecord>(`SELECT a.* FROM app.generation_runs r JOIN app.creations c ON c."ownerId"=r."ownerId" AND c.id=r."creationId" AND c."deletedAt" IS NULL
+    JOIN app.private_assets a ON a."ownerId"=r."ownerId" AND a.id=r."outputAssetId" AND a."runId"=r.id AND a."creationId"=r."creationId" AND a.key=r."outputKey" AND a.kind='image'
     WHERE r."ownerId"=$1 AND r."creationId"=$2 AND r.id=$3 AND r.status='complete'`, [ownerId, creationId, parentId])
   if (!asset) throw new AccountError("BASE_VERSION_UNAVAILABLE", 409, "所选原始图片不可用，请重新选择成功版本。")
   return assetView(asset)
@@ -157,6 +216,7 @@ export async function acceptPrivateRun(identity: AccountIdentity, command: RunCo
     // 新创作只会由明确创建或首次提交建立；失败受理会回滚此插入。
     await client.query('INSERT INTO app.creations ("ownerId",id,title) VALUES ($1,$2,$3) ON CONFLICT ("ownerId",id) DO NOTHING', [ownerId, input.creationId, "未命名创作"])
     const { rows: [creation] } = await client.query<CreationRow>('SELECT * FROM app.creations WHERE "ownerId"=$1 AND id=$2 FOR UPDATE', [ownerId, input.creationId])
+    if (creation.deletedAt !== null) return notFound()
     // A concurrent identical request may have committed while this creation lock waited.
     // Recheck it before consulting current provider configuration or rejecting stale evidence.
     const concurrent = await findRun(client, ownerId, input.clientRequestId)
@@ -192,7 +252,9 @@ export async function readPrivateAsset(identity: AccountIdentity, id: string, ki
   const assetId = lookupIdentifier(id)
   return withTransaction(async client => {
     await recheckAccount(client, identity)
-    const { rows: [row] } = await client.query<PrivateAssetRecord>('SELECT * FROM app.private_assets WHERE "ownerId"=$1 AND id=$2', [identity.user.id, assetId])
+    const { rows: [row] } = await client.query<PrivateAssetRecord>(`SELECT a.* FROM app.private_assets a
+      JOIN app.creations c ON c."ownerId"=a."ownerId" AND c.id=a."creationId" AND c."deletedAt" IS NULL
+      WHERE a."ownerId"=$1 AND a.id=$2`, [identity.user.id, assetId])
     if (!row || (kind && row.kind !== kind)) return notFound()
     return assetView(row)
   })
@@ -201,6 +263,8 @@ export async function readPrivateBase(identity: AccountIdentity, creationId: str
   const creation = identifier(creationId), parent = parentVersionId === null ? null : identifier(parentVersionId)
   return withTransaction(async client => {
     await recheckAccount(client, identity)
+    const { rows: [row] } = await client.query<CreationRow>('SELECT "deletedAt" FROM app.creations WHERE "ownerId"=$1 AND id=$2', [identity.user.id, creation])
+    if (row?.deletedAt != null) return notFound()
     return parent ? baseInTransaction(client, identity.user.id, creation, parent) : null
   })
 }
@@ -209,6 +273,7 @@ export async function setPrivateRunStatus(ownerId: string, runId: string, status
   const id = identifier(runId)
   if (!RUN_STATUSES.has(status) || status === "complete" || (failureCode !== undefined && !FAILURE_CODES.has(failureCode))) throw invalidInput("任务状态无效。")
   await withTransaction(async client => {
+    await lockActiveCreationForRun(client, ownerId, id)
     const row = await findRun(client, ownerId, id, true)
     if (!row) return notFound()
     if (row.status === "complete") return
@@ -252,6 +317,7 @@ function validAssets(row: RunRow, assets: PrivateAssetRecord[]): void {
 export async function completePrivateRun(ownerId: string, runId: string, assets: PrivateAssetRecord[]): Promise<PrivateRun> {
   const id = identifier(runId)
   return withTransaction(async client => {
+    await lockActiveCreationForRun(client, ownerId, id)
     const row = await findRun(client, ownerId, id, true)
     if (!row) return notFound()
     // 已成功后的重复修复只返回原结果，既不新增资产，也不改写首次成功数据。
@@ -293,6 +359,7 @@ function validateExecutionForRun(row: RunRow, value: unknown): AnnotationExecuti
 export async function freezePrivateAnnotationExecution(ownerId: string, runId: string, value: AnnotationExecution): Promise<void> {
   const id = identifier(runId)
   await withTransaction(async client => {
+    await lockActiveCreationForRun(client, ownerId, id)
     const row = await findRun(client, ownerId, id, true)
     if (!row) return notFound()
     if (row.status !== "preparing" || row.annotationExecution) throw new AccountError("ANNOTATION_EXECUTION_CONFLICT", 409, "批注输入已经冻结或任务已结束，不能再次覆盖。")

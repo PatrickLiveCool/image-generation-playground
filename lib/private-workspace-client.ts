@@ -1,6 +1,6 @@
 import { validateAnnotationSnapshot } from "./image-annotations"
 import { ACCOUNT_SESSION_RECHECK_EVENT } from "./account-client"
-import type { PrivateCreation, PrivateRun } from "./private-workspace-types"
+import type { PrivateCreation, PrivateDeletedCreation, PrivateRun, PrivateWorkspaceResponse } from "./private-workspace-types"
 
 export class PrivateWorkspaceError extends Error {
   constructor(message: string, readonly status = 0, readonly code = "UNCONFIRMED") { super(message) }
@@ -59,9 +59,30 @@ export async function privateRequest(path: string, options: RequestInit = {}, ti
 }
 
 export async function listPrivateWorkspace(signal?: AbortSignal): Promise<PrivateCreation[]> {
+  return (await readPrivateWorkspaceState(signal)).creations
+}
+function validDeletion(value: unknown): value is PrivateDeletedCreation {
+  return record(value) && typeof value.id === "string" && Number.isSafeInteger(value.revision) && Number(value.revision) > 0
+    && typeof value.deletedAt === "number" && Number.isFinite(value.deletedAt)
+}
+export async function readPrivateWorkspaceState(signal?: AbortSignal): Promise<PrivateWorkspaceResponse> {
   const value = await privateRequest("/api/creations", { signal })
   if (!record(value) || !Array.isArray(value.creations) || !value.creations.every(validCreation)) invalid()
-  return value.creations
+  const creations = value.creations as PrivateCreation[]
+  const deletedCreations = value.deletedCreations ?? []
+  if (!Array.isArray(deletedCreations) || !deletedCreations.every(validDeletion)) invalid()
+  if (deletedCreations.some(deleted => creations.some(creation => creation.id === deleted.id))) invalid()
+  return { creations, deletedCreations }
+}
+export async function deleteRemoteCreation(id: string, revision: number, signal?: AbortSignal): Promise<PrivateDeletedCreation> {
+  const value = await privateRequest(`/api/creations/${encodeURIComponent(id)}`, { method: "DELETE", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision }) })
+  if (!record(value) || !validDeletion(value.deletion) || value.deletion.id !== id || value.deletion.revision !== revision + 1) invalid()
+  return value.deletion
+}
+export async function restoreRemoteCreation(id: string, revision: number, signal?: AbortSignal): Promise<PrivateCreation> {
+  const value = await privateRequest(`/api/creations/${encodeURIComponent(id)}/restore`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision }) })
+  if (!record(value) || !validCreation(value.creation) || value.creation.id !== id || value.creation.revision !== revision + 1) invalid()
+  return value.creation
 }
 export async function createRemoteCreation(id: string, title: string, signal?: AbortSignal): Promise<PrivateCreation> {
   const value = await privateRequest("/api/creations", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, title }) })

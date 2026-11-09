@@ -77,7 +77,7 @@ export function checkRelease({ rootDir = root, tag, environment = process.env } 
   // The trusted harness also validates the reviewed account transition release.
   // Keep each workspace format paired with its migration contract; accepting
   // schema 1 here must not let annotation code claim an older browser format.
-  const workspaceByDatabaseVersion = { "0004": 1, "0005": 2 };
+  const workspaceByDatabaseVersion = { "0004": 1, "0005": 2, "0006": 2 };
   if (policy.browserWorkspaceSchema !== workspaceByDatabaseVersion[policy.database.maxVersion] || policy.assetCapabilityVersion !== 1) throw new Error("Review browser workspace and asset capability compatibility before changing their versions.");
   if (!exactKeys(policy.rollbackCompatibility, ["mode", "reason"]) || !["compatible", "forward-only"].includes(policy.rollbackCompatibility.mode)
       || typeof policy.rollbackCompatibility.reason !== "string" || !policy.rollbackCompatibility.reason.trim() || policy.rollbackCompatibility.reason.length > 1000) {

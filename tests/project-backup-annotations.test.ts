@@ -58,7 +58,7 @@ function fixture(): ProjectBackupPayload {
       provider_settings: [{ singleton: 1, baseUrl, tokenCiphertext: encryptProviderSecret(token, environment), apiMode: "images", models: [], mappings: [{ id: "mapping-a", name: "新显示名称", modelId: "synthetic-model" }], modelsSynced: false,
         revision: 3, updatedBy: admin, updatedAt: now, annotationCapabilities: [capability] }],
       provider_request_slots: [first, second].map(requestId => ({ userId: owner, requestId, fingerprint: "f".repeat(64), status: "finished", acceptedAt: now, deadlineAt: deadline })),
-      creations: [{ ownerId: owner, id: creation, title: "合成批注恢复", revision: 1, nextVersion: 3, createdAt: now, updatedAt: now }],
+      creations: [{ ownerId: owner, id: creation, title: "合成批注恢复", revision: 1, nextVersion: 3, createdAt: now, updatedAt: now, deletedAt: null }],
       generation_runs: [run(first, 1, originalId), run(second, 2, outputId)],
       private_assets: [asset(first, originalId, "outputs/final", "a".repeat(64), 10), asset(second, inputIds[0], "inputs/reference-1", "a".repeat(64), 10),
         asset(second, inputIds[1], "inputs/reference-2", "b".repeat(64), 20), asset(second, outputId, "outputs/final", "c".repeat(64), 30)] },
@@ -82,6 +82,46 @@ test("批注快照/冻结输入与禁用管理员证据可完整备份，历史�
   const rebound = fixture(); rebound.tables.provider_settings[0].annotationCapabilities = []
   rebound.tables.provider_settings[0].baseUrl = "https://another-synthetic.example/v1"
   assert.doesNotThrow(() => encodeProjectBackup(resigned(rebound), key))
+})
+
+test("0006归档保留创作删除标记、版本与资产；0005归档保留认证前的原始字段和摘要", () => {
+  const current = fixture()
+  current.tables.creations[0].deletedAt = now
+  assert.deepEqual(decodeProjectBackup(encodeProjectBackup(resigned(current), key), key), resigned(current))
+  const legacy = fixture()
+  legacy.migrations = legacy.migrations.filter(entry => !entry.name.startsWith("0006"))
+  legacy.release.database = { ...policy.database, minVersion: "0005", maxVersion: "0005", migrations: legacy.migrations }
+  delete legacy.tables.creations[0].deletedAt
+  const original = resigned(legacy)
+  assert.deepEqual(decodeProjectBackup(encodeProjectBackup(original, key), key), original)
+  assert.equal(Object.hasOwn(original.tables.creations[0], "deletedAt"), false)
+})
+
+test("兼容旧归档不接受跨版本字段、混用迁移账本或重写前的错误摘要", async () => {
+  const mutations: Array<(value: ProjectBackupPayload) => void> = [
+    value => { delete value.tables.creations[0].deletedAt },
+    value => { value.tables.creations[0].deletedAt = "invalid-date" },
+    value => {
+      value.migrations = value.migrations.filter(entry => !entry.name.startsWith("0006"))
+      value.release.database = { ...policy.database, minVersion: "0005", maxVersion: "0005", migrations: value.migrations }
+      // 即使值为null，旧归档也不能夹带0006字段。
+    },
+    value => {
+      value.release.database = { ...policy.database, minVersion: "0005", maxVersion: "0005", migrations: policy.database.migrations.slice(0, 5) }
+      delete value.tables.creations[0].deletedAt
+    },
+  ]
+  for (const mutate of mutations) {
+    const value = fixture(); mutate(value)
+    let queries = 0
+    await assert.rejects(restoreProjectBackup({ query: async () => { queries++; return { rows: [] } } }, migration, seal(value), key, value.storage), ProjectBackupError)
+    assert.equal(queries, 0)
+  }
+  const stale = fixture()
+  stale.migrations = stale.migrations.slice(0, 5)
+  stale.release.database = { ...policy.database, minVersion: "0005", maxVersion: "0005", migrations: stale.migrations }
+  delete stale.tables.creations[0].deletedAt
+  assert.throws(() => validateProjectBackupPayload(stale), error => error instanceof ProjectBackupError && error.code === "BACKUP_DIGEST_INVALID")
 })
 
 test("既有能力证据的记录者降为user后仍可备份，原能力和证据摘要保持不变", () => {

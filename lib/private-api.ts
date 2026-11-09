@@ -17,8 +17,8 @@ export async function privateAssetResponse(request: Request, id: string, kind: "
     const identity = await accountIdentity(request.headers)
     const asset = await readPrivateAsset(identity, id, kind)
     const { bytes, mediaType } = await readVerifiedPrivateAsset(asset, createPrivateCosStore())
-    // COS读取期间若账号被禁用/会话撤销，响应前再次核对，不交出已读字节。
-    await accountIdentity(request.headers)
+    // COS读取可能跨越账号撤销或创作删除；交付字节前重新核对两层访问权限。
+    await readPrivateAsset(identity, id, kind)
     const encodedName = encodeURIComponent(asset.name ?? "document").replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
     return new Response(new Uint8Array(bytes), { headers: {
       "Content-Type": mediaType, "Content-Length": String(bytes.length), "Cache-Control": "private, no-store, max-age=0", "Vary": "Cookie",

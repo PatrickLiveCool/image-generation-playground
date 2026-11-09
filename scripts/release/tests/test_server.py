@@ -96,7 +96,7 @@ class FakeSystem:
         if command == 'verify' and not compatible:
             raise ReleaseError('synthetic incompatible database')
         return {'command': command, 'ledgerSha256': '4' * 64, 'version': self.database_version,
-                'pending': [] if compatible else ['0005-image-annotations.sql'], 'compatible': compatible, 'connectionBudget': 9}
+                'pending': [] if compatible else ['0006-creation-soft-delete.sql'], 'compatible': compatible, 'connectionBudget': 9}
 
     def maintenance_ready(self, origin):
         if self.maintenance_probe_failure:
@@ -501,7 +501,7 @@ class ServerTest(unittest.TestCase):
         self.assertIn('/var/lib/qintopia-image-acme', migration)
         self.assertLess(phases.index('database_preflight'), phases.index('migrating'))
         self.assertLess(phases.index('database_verified'), phases.index('staged'))
-        self.assertEqual(result['database']['after']['version'], '0005')
+        self.assertEqual(result['database']['after']['version'], '0006')
 
     def test_annotation_upgrade_is_explicit_forward_only_and_keeps_rollback_closed(self):
         source = self.bundle(account=True, workspace=1, database_version='0004')
@@ -510,7 +510,7 @@ class ServerTest(unittest.TestCase):
         result = self.runtime.deploy(*self.bundle('v0.2.0', 'b' * 40, account=True, workspace=2))
         self.assertEqual(result['status'], 'healthy')
         self.assertEqual(self.runtime.state['current']['manifest']['browserWorkspaceSchema'], 2)
-        self.assertEqual(result['database']['after']['version'], '0005')
+        self.assertEqual(result['database']['after']['version'], '0006')
         self.runtime.acknowledge('complete')
         current = dict(self.runtime.state['current'])
         site = pathlib.Path(self.config['nginxSite']).read_bytes()
@@ -523,6 +523,42 @@ class ServerTest(unittest.TestCase):
         self.runtime.recover()
         self.assertEqual(self.runtime.state['current'], current)
         self.assertNotIn('serviceMaintenance', self.runtime.state)
+
+    def test_soft_delete_upgrade_rejects_0005_rollback_before_database_or_routing_changes(self):
+        self.runtime.deploy(*self.bundle(account=True, workspace=1, database_version='0004'))
+        self.runtime.acknowledge('complete')
+        previous = self.bundle('v0.2.0', 'b' * 40, account=True, workspace=2, database_version='0005')
+        self.runtime.deploy(*previous)
+        self.runtime.acknowledge('complete')
+        result = self.runtime.deploy(*self.bundle('v0.3.0', 'c' * 40, account=True, workspace=2))
+        self.assertEqual(result['database']['after']['version'], '0006')
+        self.runtime.acknowledge('complete')
+        current = dict(self.runtime.state['current'])
+        site = pathlib.Path(self.config['nginxSite']).read_bytes()
+        calls = list(self.system.database_calls)
+        with self.assertRaisesRegex(ReleaseError, 'database contracts are not rollback compatible'):
+            self.runtime.deploy('rollback', *previous[1:])
+        self.assertEqual(self.runtime.state['current'], current)
+        self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
+        self.assertEqual(self.system.database_calls, calls)
+        self.assertEqual(self.system.database_version, '0006')
+        self.runtime.recover()
+        self.assertEqual(self.runtime.state['current'], current)
+        self.assertNotIn('serviceMaintenance', self.runtime.state)
+
+    def test_failed_soft_delete_upgrade_keeps_maintenance_when_source_cannot_read_0006(self):
+        self.runtime.deploy(*self.bundle(account=True, workspace=1, database_version='0004'))
+        self.runtime.acknowledge('complete')
+        self.runtime.deploy(*self.bundle('v0.2.0', 'b' * 40, account=True, workspace=2, database_version='0005'))
+        self.runtime.acknowledge('complete')
+        source = dict(self.runtime.state['current'])
+        self.system.start_failure = True
+        with self.assertRaises(ReleaseError):
+            self.runtime.deploy(*self.bundle('v0.3.0', 'c' * 40, account=True, workspace=2))
+        self.assertEqual(self.system.database_version, '0006')
+        self.assertEqual(self.runtime.state['current'], source)
+        self.assertEqual(self.runtime.receipt()['status'], 'service-maintenance')
+        self.assertNotIn('proxy_pass', pathlib.Path(self.config['nginxSite']).read_text())
 
     def test_annotation_failed_upgrade_cannot_restore_schema1_even_when_database_is_compatible(self):
         self.runtime.deploy(*self.bundle(account=True, workspace=1))
@@ -666,7 +702,7 @@ class ServerTest(unittest.TestCase):
         self.runtime.set_access_floor()
         self.runtime.enter_service_maintenance()
         self.runtime.phase('migrating')
-        self.system.database_version = '0005'
+        self.system.database_version = '0006'
         restarted = Runtime(self.config, self.system, self.fetch)
         restarted.recover()
         self.assertEqual([command for command, _ in self.system.database_calls], ['verify'])

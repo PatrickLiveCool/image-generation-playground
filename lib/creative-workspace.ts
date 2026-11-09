@@ -1,5 +1,5 @@
 import type { Generation } from "@/components/image-combiner/types"
-import type { PrivateCreation, PrivateRun } from "./private-workspace-types"
+import type { PrivateCreation, PrivateDeletedCreation, PrivateRun } from "./private-workspace-types"
 import type { Creation, CreationDraft, CreativeWorkspace } from "./creation-types"
 import { validateAnnotationSnapshot, type AnnotationDraft } from "./image-annotations"
 
@@ -55,6 +55,16 @@ export function newCreation(initial: Partial<CreationDraft> = {}, id: string = c
 export function addCreation(workspace: CreativeWorkspace, creation: Creation): CreativeWorkspace {
   if (workspace.creations.some(item => item.id === creation.id)) return workspace
   return { ...workspace, activeCreationId: creation.id, creations: [creation, ...workspace.creations] }
+}
+
+/** Server tombstones also remove unsaved first-editor copies; an old local draft cannot resurrect one. */
+export function removeDeletedCreations(workspace: CreativeWorkspace, deleted: PrivateDeletedCreation[], preserveConfirmed = false): CreativeWorkspace {
+  const removed = new Map(deleted.map(item => [item.id, item.revision]))
+  const activeIndex = workspace.creations.findIndex(item => item.id === workspace.activeCreationId)
+  const creations = workspace.creations.filter(item => !removed.has(item.id) || (preserveConfirmed && (item.remoteRevision ?? 0) > removed.get(item.id)!))
+  if (creations.length === workspace.creations.length) return workspace
+  return { ...workspace, creations, activeCreationId: creations.some(item => item.id === workspace.activeCreationId)
+    ? workspace.activeCreationId : creations[Math.min(Math.max(activeIndex, 0), creations.length - 1)]?.id ?? null }
 }
 
 function changeCreation(workspace: CreativeWorkspace, id: string, change: (creation: Creation) => Creation): CreativeWorkspace {
@@ -210,7 +220,8 @@ export function markPrivateRunUnknown(workspace: CreativeWorkspace, creationId: 
 }
 
 /** Only remote creations and remote successful versions are authoritative. Local data contributes drafts and unresolved request IDs. */
-export function mergePrivateWorkspace(local: CreativeWorkspace, remote: PrivateCreation[], options: { preserveConfirmed?: boolean } = {}): CreativeWorkspace {
+export function mergePrivateWorkspace(local: CreativeWorkspace, remote: PrivateCreation[], options: { preserveConfirmed?: boolean; deletedCreations?: PrivateDeletedCreation[] } = {}): CreativeWorkspace {
+  if (options.deletedCreations?.length) local = removeDeletedCreations(local, options.deletedCreations, options.preserveConfirmed)
   const creations = remote.map(server => {
     const existing = local.creations.find(creation => creation.id === server.id)
     // Only live, confirmed state may reject a stale server snapshot; IndexedDB is never authoritative.
@@ -338,7 +349,7 @@ export function serializeEmergencyDrafts(baseRevision: number, pendingWriteId: s
   return JSON.stringify({ schema: 2, baseRevision, pendingWriteId, entries, activeCreationId })
 }
 
-export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string | null, remote: PrivateCreation[] = []): { workspace: CreativeWorkspace; referencesNeedReselect: boolean } {
+export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string | null, remote: PrivateCreation[] = [], deleted: PrivateDeletedCreation[] = []): { workspace: CreativeWorkspace; referencesNeedReselect: boolean } {
   const unchanged = { workspace, referencesNeedReselect: false }
   if (!raw) return unchanged
   let saved: unknown
@@ -351,6 +362,7 @@ export function recoverEmergencyDrafts(workspace: CreativeWorkspace, raw: string
   let referencesNeedReselect = false
   for (const value of saved.entries) {
     if (!object(value) || typeof value.id !== "string" || !Number.isInteger(value.draftRevision) || !object(value.draft) || (value.baseVersionId !== null && typeof value.baseVersionId !== "string")) continue
+    if (deleted.some(item => item.id === value.id)) continue
     const draft = value.draft
     if (!["prompt", "selectedMappingId", "aspectRatio"].every(key => typeof draft[key] === "string") || typeof draft.useUrls !== "boolean" || !QUALITIES.has(String(draft.quality))) continue
     let current = restored.creations.find(creation => creation.id === value.id)

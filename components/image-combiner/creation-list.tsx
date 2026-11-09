@@ -1,12 +1,14 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
-import { Plus, Pencil, Loader2 } from "lucide-react"
+import { useRef, useState, type FormEvent } from "react"
+import { Plus, Pencil, Loader2, MoreHorizontal, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import type { Generation } from "./types"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog"
 
 export interface CreationListProps {
   creations: Array<{ id: string; title: string; unread: boolean; versions: Generation[] }>
@@ -14,13 +16,25 @@ export interface CreationListProps {
   onSelect: (id: string) => void
   onCreate: () => void
   onRename: (id: string, title: string) => void | Promise<void>
+  onDelete: (id: string) => Promise<void>
+  deletionBlocked: (id: string) => string | null
 }
 
-export function CreationList({ creations, activeId, onSelect, onCreate, onRename }: CreationListProps) {
+export function CreationList({ creations, activeId, onSelect, onCreate, onRename, onDelete, deletionBlocked }: CreationListProps) {
+  const navRef = useRef<HTMLElement>(null)
+  const actionTrigger = useRef<HTMLButtonElement | null>(null)
   const [editing, setEditing] = useState<{ id: string; title: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState("")
   const active = creations.find(creation => creation.id === activeId)
+  const restoreFocus = (event: Event) => {
+    event.preventDefault()
+    const fallback = navRef.current?.querySelector<HTMLElement>(window.matchMedia("(min-width: 1024px)").matches ? '[aria-current="page"]' : "select")
+    ;(actionTrigger.current?.isConnected ? actionTrigger.current : fallback)?.focus()
+  }
   const startRename = (creation: { id: string; title: string }) => { setEditing(creation); setError("") }
   const saveName = async (event: FormEvent) => {
     event.preventDefault()
@@ -32,9 +46,25 @@ export function CreationList({ creations, activeId, onSelect, onCreate, onRename
     catch (error) { setError(error instanceof Error ? error.message : "名称未能保存，请重试。") }
     finally { setSaving(false) }
   }
+  const confirmDelete = async () => {
+    if (!deleting || deleteBusy) return
+    const reason = deletionBlocked(deleting.id)
+    if (reason) { setDeleteError(reason); return }
+    setDeleteBusy(true); setDeleteError("")
+    try { await onDelete(deleting.id); setDeleting(null) }
+    catch (error) { setDeleteError(error instanceof Error ? error.message : "删除未完成，请重试。") }
+    finally { setDeleteBusy(false) }
+  }
+  const menu = (creation: { id: string; title: string }) => <DropdownMenu modal={false}>
+    <DropdownMenuTrigger asChild><button type="button" onPointerDownCapture={event => { actionTrigger.current = event.currentTarget }} onKeyDownCapture={event => { actionTrigger.current = event.currentTarget }} aria-label={`创作操作 ${creation.title}`} className="mr-1 shrink-0 rounded p-2 text-gray-400 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white"><MoreHorizontal className="size-4" /></button></DropdownMenuTrigger>
+    <DropdownMenuContent align="end" className="border-white/20 bg-neutral-950 text-white">
+      <DropdownMenuItem onSelect={() => startRename(creation)}><Pencil className="size-4" />重命名</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => { setDeleting(creation); setDeleteError("") }} className="text-red-300"><Trash2 className="size-4" />删除创作</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>
 
   return (
-    <nav aria-label="创作列表" className="flex min-h-0 flex-col gap-3 lg:h-full">
+    <nav ref={navRef} aria-label="创作列表" className="flex min-h-0 flex-col gap-3 lg:h-full">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-medium text-gray-300">我的创作</h2>
         <Button type="button" onClick={onCreate} size="sm" className="h-8 bg-white text-black hover:bg-gray-200">
@@ -48,7 +78,7 @@ export function CreationList({ creations, activeId, onSelect, onCreate, onRename
           {!creations.length && <option value="">暂无创作</option>}
           {creations.map(creation => <option key={creation.id} value={creation.id}>{creation.title}{creation.versions.some(version => version.status === "loading") ? " · 生成中" : creation.unread ? " · 新结果" : ""}</option>)}
         </select>
-        <button type="button" disabled={!active} aria-label="重命名当前创作" onClick={() => active && startRename(active)} className="rounded-md border border-white/20 p-2 text-gray-300 hover:bg-white/10 disabled:opacity-40"><Pencil className="size-4" /></button>
+        {active && menu(active)}
       </div>
 
       <div className="hidden min-h-0 flex-1 flex-col gap-1 overflow-y-auto lg:flex">
@@ -63,14 +93,14 @@ export function CreationList({ creations, activeId, onSelect, onCreate, onRename
                   {pending ? <><Loader2 className="size-3 animate-spin" />生成中</> : creation.unread ? <><span className="size-1.5 rounded-full bg-emerald-300" />新结果</> : count ? `${count} 个版本` : "等待首次生成"}
                 </span>
               </button>
-              <button type="button" aria-label={`重命名 ${creation.title}`} onClick={() => startRename(creation)} className="mr-1 rounded p-2 text-gray-400 opacity-60 hover:bg-white/10 hover:text-white group-hover:opacity-100 focus-visible:opacity-100"><Pencil className="size-3.5" /></button>
+              {menu(creation)}
             </div>
           )
         })}
       </div>
 
       <Dialog open={Boolean(editing)} onOpenChange={open => { if (!open) setEditing(null) }}>
-        <DialogContent className="border-white/15 bg-neutral-950 text-white sm:max-w-sm">
+        <DialogContent onCloseAutoFocus={restoreFocus} className="border-white/15 bg-neutral-950 text-white sm:max-w-sm">
           <DialogHeader><DialogTitle>重命名创作</DialogTitle><DialogDescription className="text-gray-400">名称仅用于区分创作，历史版本会保留。</DialogDescription></DialogHeader>
           <form onSubmit={saveName} className="space-y-4">
             <label htmlFor="creation-name" className="sr-only">创作名称</label>
@@ -80,6 +110,16 @@ export function CreationList({ creations, activeId, onSelect, onCreate, onRename
           </form>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={Boolean(deleting)} onOpenChange={open => { if (!open && !deleteBusy) setDeleting(null) }}>
+        <AlertDialogContent onCloseAutoFocus={restoreFocus} className="border-white/20 bg-neutral-950 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除「{deleting?.title}」？</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-300">创作及其历史版本将从列表移除，本机草稿也会移出工作区。删除后可在本次会话的提示中撤销；刷新或关闭提示后不再提供此入口。图片文件暂不永久清理。</AlertDialogDescription>
+          </AlertDialogHeader>
+          {(deleteError || (deleting && deletionBlocked(deleting.id))) && <p role="alert" className="text-sm text-amber-200">{deleteError || (deleting && deletionBlocked(deleting.id))}</p>}
+          <AlertDialogFooter><AlertDialogCancel disabled={deleteBusy} className="border-white/20 bg-transparent hover:bg-white/10 hover:text-white">取消</AlertDialogCancel><Button type="button" disabled={deleteBusy || Boolean(deleting && deletionBlocked(deleting.id))} onClick={() => void confirmDelete()} className="bg-red-700 text-white hover:bg-red-600">{deleteBusy ? "正在删除…" : "删除创作"}</Button></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </nav>
   )
 }

@@ -11,7 +11,7 @@ import { assertPrivateKey, privateRunPrefix, type PrivateCosStore } from "../lib
 import { executePrivateGeneration, readVerifiedPrivateAsset, repairPrivateGeneration, type PrivateGenerationDependencies } from "../lib/private-generation"
 import { bytesHash, parsePrivateGenerationForm } from "../lib/private-generation-input"
 import * as privateWorkspace from "../lib/private-workspace-service"
-import { acceptPrivateRun, completePrivateRun, createPrivateCreation, listPrivateCreations, readPrivateAsset, readPrivateBase, readPrivateCreation, readPrivateRun, renamePrivateCreation, setPrivateRunStatus } from "../lib/private-workspace-service"
+import { acceptPrivateRun, completePrivateRun, createPrivateCreation, deletePrivateCreation, listPrivateCreations, listPrivateWorkspaceState, readPrivateAsset, readPrivateBase, readPrivateCreation, readPrivateRun, renamePrivateCreation, restorePrivateCreation, setPrivateRunStatus } from "../lib/private-workspace-service"
 import type { PrivateAssetRecord, PrivateRunRecord, RunCommand } from "../lib/private-workspace-records"
 import { saveAdminProvider } from "../lib/provider-configuration"
 import { assertAccountTestFixture } from "../scripts/database/test-fixture"
@@ -358,6 +358,92 @@ test("专用 PostgreSQL 私有创作：账号隔离、原子受理、成功版�
     assert.equal(Buffer.from((await readVerifiedPrivateAsset(document, store)).bytes).toString("utf8"), documentText)
     assert.equal(counts.model, 2)
     assert.equal((await pool.query('SELECT status FROM app.provider_request_slots WHERE "userId"=$1 AND "requestId"=$2', [user.user.id, editedRunId])).rows[0].status, "finished")
+  })
+
+  await t.test("可撤销软删除保留所有记录，跨设备墓碑核对且阻止已删内容和旧请求复活", async () => {
+    const input = command({ configRevision: revision }), accepted = await acceptPrivateRun(user, input)
+    const asset = output(accepted.record)
+    const document = { ...asset, id: randomUUID(), key: `${privateRunPrefix(user.user.id, input.creationId, input.clientRequestId)}/inputs/document`, kind: "document" as const, mediaType: "text/plain", name: "删除保留.txt" }
+    await completePrivateRun(user.user.id, input.clientRequestId, [asset, document])
+    const original = await readPrivateCreation(userHeaders, input.creationId)
+    const savedAssets = (await pool.query('SELECT * FROM app.private_assets WHERE "ownerId"=$1 AND "creationId"=$2 ORDER BY id', [user.user.id, input.creationId])).rows
+    await assert.rejects(deletePrivateCreation(adminHeaders, input.creationId, { revision: original.revision }), code("NOT_FOUND"))
+    await assert.rejects(restorePrivateCreation(adminHeaders, input.creationId, { revision: original.revision }), code("NOT_FOUND"))
+    await assert.rejects(deletePrivateCreation(userHeaders, input.creationId, { revision: original.revision, ownerId: user.user.id }), code("INVALID_INPUT"))
+    const [deletion, duplicate] = await Promise.all([deletePrivateCreation(userHeaders, input.creationId, { revision: original.revision }), deletePrivateCreation(userHeaders, input.creationId, { revision: original.revision })])
+    assert.deepEqual(duplicate, deletion)
+    assert.equal(deletion.revision, original.revision + 1)
+    assert.ok(Number.isSafeInteger(deletion.deletedAt))
+    const state = await listPrivateWorkspaceState(new Headers(userHeaders))
+    assert.equal(state.creations.some(item => item.id === input.creationId), false)
+    assert.deepEqual(state.deletedCreations.find(item => item.id === input.creationId), deletion)
+    assert.equal((await listPrivateWorkspaceState(adminHeaders)).deletedCreations.some(item => item.id === input.creationId), false)
+    for (const read of [
+      () => readPrivateCreation(userHeaders, input.creationId), () => readPrivateRun(user, input.clientRequestId),
+      () => readPrivateAsset(user, asset.id, "image"), () => readPrivateAsset(user, document.id, "document"),
+      () => readPrivateBase(user, input.creationId, input.clientRequestId), () => readPrivateBase(user, input.creationId, null),
+      () => renamePrivateCreation(userHeaders, input.creationId, { revision: deletion.revision, title: "不能复活" }),
+      () => createPrivateCreation(userHeaders, { id: input.creationId, title: "不能重新创建" }),
+      () => acceptPrivateRun(user, input), () => accept(user, { creationId: input.creationId }),
+      () => completePrivateRun(user.user.id, input.clientRequestId, []),
+      () => setPrivateRunStatus(user.user.id, input.clientRequestId, "failed"),
+    ]) await assert.rejects(read, code("NOT_FOUND"))
+    assert.deepEqual((await pool.query('SELECT * FROM app.private_assets WHERE "ownerId"=$1 AND "creationId"=$2 ORDER BY id', [user.user.id, input.creationId])).rows, savedAssets)
+    assert.equal((await pool.query('SELECT count(*)::integer AS count FROM app.generation_runs WHERE "ownerId"=$1 AND "creationId"=$2', [user.user.id, input.creationId])).rows[0].count, 1)
+    assert.equal((await pool.query('SELECT status FROM app.provider_request_slots WHERE "userId"=$1 AND "requestId"=$2', [user.user.id, input.clientRequestId])).rows[0].status, "finished")
+    const [restored, repeatedRestore] = await Promise.all([restorePrivateCreation(userHeaders, input.creationId, { revision: deletion.revision }), restorePrivateCreation(userHeaders, input.creationId, { revision: deletion.revision })])
+    assert.deepEqual(restored, repeatedRestore)
+    assert.deepEqual(restored.versions, original.versions.map(run => ({ ...run, creationRevision: restored.revision })))
+    assert.equal(restored.revision, deletion.revision + 1)
+    assert.equal((await readPrivateAsset(user, document.id, "document")).id, document.id)
+    assert.equal((await listPrivateWorkspaceState(userHeaders)).deletedCreations.some(item => item.id === input.creationId), false)
+    await assert.rejects(deletePrivateCreation(userHeaders, input.creationId, { revision: original.revision }), code("CREATION_REVISION_CONFLICT"))
+    const secondDeletion = await deletePrivateCreation(userHeaders, input.creationId, { revision: restored.revision })
+    await assert.rejects(restorePrivateCreation(userHeaders, input.creationId, { revision: deletion.revision }), code("CREATION_REVISION_CONFLICT"))
+    await restorePrivateCreation(userHeaders, input.creationId, { revision: secondDeletion.revision })
+  })
+
+  await t.test("生成中、过期、结果未知及待补保存均拒绝删除，明确失败任务可以删除", async () => {
+    const { record } = await accept()
+    for (const status of ["preparing", "generating", "saving", "unknown", "save_pending"] as const) {
+      await setPrivateRunStatus(user.user.id, record.public.id, status)
+      const current = await readPrivateCreation(userHeaders, record.public.creationId)
+      await assert.rejects(deletePrivateCreation(userHeaders, current.id, { revision: current.revision }), code("CREATION_HAS_PENDING_RUNS"))
+    }
+    await finish(record)
+    const expired = (await accept()).record
+    await pool.query('UPDATE app.generation_runs SET "deadlineAt"=statement_timestamp()-interval \'1 second\' WHERE "ownerId"=$1 AND id=$2', [user.user.id, expired.public.id])
+    assert.equal((await readPrivateRun(user, expired.public.id)).public.status, "unknown")
+    await assert.rejects(deletePrivateCreation(userHeaders, expired.public.creationId, { revision: expired.public.creationRevision }), code("CREATION_HAS_PENDING_RUNS"))
+    await setPrivateRunStatus(user.user.id, expired.public.id, "failed", "INPUT_SAVE_FAILED")
+    const deletion = await deletePrivateCreation(userHeaders, expired.public.creationId, { revision: expired.public.creationRevision })
+    assert.equal(deletion.id, expired.public.creationId)
+  })
+
+  await t.test("删除与受理、补保存竞争同一创作锁，不留已删在途任务也不产生死锁", async () => {
+    const creation = await createPrivateCreation(userHeaders, { id: randomUUID(), title: "删除受理竞争" })
+    const input = command({ creationId: creation.id, configRevision: revision })
+    const [removed, admitted] = await Promise.allSettled([deletePrivateCreation(userHeaders, creation.id, { revision: creation.revision }), acceptPrivateRun(user, input)])
+    if (removed.status === "fulfilled") {
+      assert.equal(admitted.status, "rejected")
+      if (admitted.status === "rejected") assert.ok(code("NOT_FOUND")(admitted.reason))
+      assert.equal((await pool.query('SELECT 1 FROM app.generation_runs WHERE "ownerId"=$1 AND "creationId"=$2', [user.user.id, creation.id])).rowCount, 0)
+    } else {
+      assert.ok(code("CREATION_REVISION_CONFLICT")(removed.reason))
+      assert.equal(admitted.status, "fulfilled")
+      if (admitted.status === "fulfilled") await finish(admitted.value.record)
+    }
+    const { record } = await accept()
+    await setPrivateRunStatus(user.user.id, record.public.id, "failed", "INPUT_SAVE_FAILED")
+    const [deleted, completed] = await Promise.allSettled([deletePrivateCreation(userHeaders, record.public.creationId, { revision: record.public.creationRevision }), finish(record)])
+    if (deleted.status === "fulfilled") {
+      assert.equal(completed.status, "rejected")
+      if (completed.status === "rejected") assert.ok(code("NOT_FOUND")(completed.reason))
+      assert.equal((await pool.query('SELECT status FROM app.generation_runs WHERE "ownerId"=$1 AND id=$2', [user.user.id, record.public.id])).rows[0].status, "failed")
+    } else {
+      assert.ok(code("CREATION_REVISION_CONFLICT")(deleted.reason))
+      assert.equal(completed.status, "fulfilled")
+    }
   })
 
   await t.test("受理等待账号锁后复核禁用与过期会话，不留下付费槽", async () => {

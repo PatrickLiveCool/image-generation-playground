@@ -6,8 +6,8 @@
   "database": {
     "name": "qintopia_image",
     "schema": "app",
-    "minVersion": "0005",
-    "maxVersion": "0005",
+    "minVersion": "0006",
+    "maxVersion": "0006",
     "migrations": [
       {
         "name": "0001-accounts.sql",
@@ -28,6 +28,10 @@
       {
         "name": "0005-image-annotations.sql",
         "sha256": "7f1fed8f92c018cb76a10e9ee819fbcf620e77df6ad8146f7068d8e7a6fc90ca"
+      },
+      {
+        "name": "0006-creation-soft-delete.sql",
+        "sha256": "478aecc2b7e0f40cb619eb7f90aa1a43eede4568857d3a36bca665521bd04066"
       }
     ]
   },
@@ -35,6 +39,6 @@
   "assetCapabilityVersion": 1,
   "rollbackCompatibility": {
     "mode": "compatible",
-    "reason": "仅回退到已验证成功且兼容0005批注数据库账本、account-private-v1访问协议、schema2浏览器工作区与图片能力版本的账号版。保留数据库记录、COS对象和ASSET_ACCESS_SECRET；旧schema1工作区不具备批注恢复能力，没有兼容目标时进入受控维护状态。"
+    "reason": "仅回退到已验证成功且兼容0006创作软删除数据库账本、account-private-v1访问协议、schema2浏览器工作区与图片能力版本的账号版。0005及更早应用不识别删除标记，会重新开放已删创作，禁止回退。保留数据库记录、COS对象和ASSET_ACCESS_SECRET；没有兼容目标时进入受控维护状态。"
   }
 }

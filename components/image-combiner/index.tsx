@@ -13,11 +13,13 @@ import { createEmptyAnnotationSnapshot, type AnnotationDraft } from "@/lib/image
 import { buildCreationRequest } from "@/lib/creation-request"
 import { privateRequest } from "@/lib/private-workspace-client"
 import { useModelCatalog } from "./hooks/use-model-catalog"
-import { useCreativeWorkspace, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
+import { useCreativeWorkspace, creationDeletionBlocked, type CreativeWorkspaceController } from "./hooks/use-creative-workspace"
 import { useCreationGeneration } from "./hooks/use-creation-generation"
 import { useAspectRatio } from "./hooks/use-aspect-ratio"
 import { useImageActions } from "./hooks/use-image-actions"
 import { InputSection } from "./input-section"
+import { EditorLayout } from "./editor-layout"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { OutputSection } from "./output-section"
 import { CreationList } from "./creation-list"
 import { CreationHistory } from "./creation-history"
@@ -54,7 +56,9 @@ export function ImageCombiner({ accountId }: { accountId: string }): ReactElemen
 
 function AccountImageCombiner({ accountId }: { accountId: string }): ReactElement {
   const api = useModelCatalog()
-  const workspace = useCreativeWorkspace(accountId)
+  const uploadTokens = useRef(new Map<string, symbol>())
+  const hasPendingInput = useCallback((id: string) => [...uploadTokens.current.keys()].some(key => key.startsWith(`${id}:`)), [])
+  const workspace = useCreativeWorkspace(accountId, hasPendingInput)
   const [showHelp, setShowHelp] = useState(false)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
@@ -76,7 +80,6 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
     return () => { cancelled = true }
   }, [])
   const generation = useCreationGeneration(workspace, api.catalog, showToast)
-  const uploadTokens = useRef(new Map<string, symbol>())
   const [uploads, setUploads] = useState<string[]>([])
   const mounted = useRef(true)
   useEffect(() => {
@@ -146,6 +149,7 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
   }, [getCreation, patchDraft, showToast, refreshUploads])
 
   const submit = useCallback((creationId: string) => {
+    if (workspace.lifecycleBlocked(creationId)) return
     if ([...uploadTokens.current.keys()].some(key => key.startsWith(`${creationId}:`))) return
     void generation.generate(creationId)
   }, [generation.generate])
@@ -154,6 +158,13 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
     void workspace.createCreation(draft ? { selectedMappingId: draft.selectedMappingId, aspectRatio: draft.aspectRatio, quality: draft.quality } : {})
   }
   const activeCreationId = workspace.activeCreation?.id
+  const deletionBlocked = (id: string) => {
+    const creation = workspace.getCreation(id)
+    if (!creation) return "创作列表已变化，请关闭后重新选择。"
+    if (workspace.lifecycleBlocked(id)) return "删除操作尚未结束，请刷新创作核对。"
+    if (uploads.some(key => key.startsWith(`${id}:`))) return "正在处理上传内容，请稍候再删除。"
+    return creationDeletionBlocked(creation)
+  }
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-black font-sans text-white">
@@ -165,10 +176,18 @@ function AccountImageCombiner({ accountId }: { accountId: string }): ReactElemen
           <div className="flex gap-2"><button type="button" disabled={workspace.remoteBusy} onClick={() => void workspace.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-50">刷新创作</button><button type="button" onClick={() => void api.refresh()} className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs hover:bg-white/10">刷新模型</button></div>
         </header>
         {(api.error || workspace.storageError) && <div role="alert" className="mb-3 shrink-0 rounded-md border border-amber-300/30 bg-black/90 p-3 text-xs leading-relaxed text-amber-200">{workspace.storageError || api.error}</div>}
+        {workspace.deletions.length > 0 && <div aria-label="删除操作反馈" className="mb-3 max-h-40 shrink-0 space-y-2 overflow-y-auto">{workspace.deletions.map(item => <div key={item.id} className="flex flex-wrap items-center gap-2 rounded-md border border-white/20 bg-neutral-950 px-3 py-2 text-xs">
+          <span role="status">{item.state === "deleted" ? `已删除「${item.title}」，本会话可撤销。` : `「${item.title}」的${item.state === "delete-unknown" ? "删除" : "撤销"}结果待核对。`}{item.error && ` ${item.error}`}</span>
+          {item.state === "deleted" && <button type="button" disabled={workspace.lifecycleBusy.includes(item.id)} onClick={() => void workspace.restoreCreation(item.id)} className="rounded border border-white/25 px-2 py-1 text-sky-200 disabled:opacity-50">{workspace.lifecycleBusy.includes(item.id) ? "正在撤销…" : "撤销删除"}</button>}
+          {(item.state !== "deleted" || item.error) && <button type="button" disabled={workspace.remoteBusy || workspace.lifecycleBusy.includes(item.id)} onClick={() => void workspace.refresh()} className="rounded border border-white/25 px-2 py-1 disabled:opacity-50">核对状态</button>}
+          {item.state === "deleted" && <button type="button" disabled={workspace.lifecycleBusy.includes(item.id)} aria-label={`关闭 ${item.title} 的撤销提示`} onClick={() => workspace.dismissDeletion(item.id)} className="ml-auto px-2 py-1 text-gray-400 disabled:opacity-50">关闭提示</button>}
+        </div>)}</div>}
         {workspace.ready && workspace.activeCreation ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-pb-44 rounded-md border border-white/10 bg-black/75 p-2 pb-44 lg:flex-row lg:overflow-hidden lg:scroll-pb-0 lg:pb-2">
-            <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} /></aside>
+            <aside className="shrink-0 lg:w-[180px] lg:border-r lg:border-white/10 lg:pr-2"><CreationList creations={workspace.creations} activeId={workspace.activeCreation.id} onSelect={workspace.selectCreation} onCreate={newCreation} onRename={workspace.renameCreation} onDelete={workspace.deleteCreation} deletionBlocked={deletionBlocked} /></aside>
+            <div className="contents" inert={workspace.lifecycleBlocked(workspace.activeCreation.id) || undefined}>
             <CreationEditor key={workspace.activeCreation.id} creation={workspace.activeCreation} workspace={workspace} api={api} onToast={showToast} onUpload={upload} onClearImage={clearImage} onDocumentUpload={file => activeCreationId ? uploadDocument(activeCreationId, file) : Promise.resolve()} onClearDocument={() => { if (activeCreationId) clearDocument(activeCreationId) }} uploading={uploads.some(key => key.startsWith(`${workspace.activeCreationId}:`))} onGenerate={submit} onCancel={generation.cancel} onCheckStatus={generation.checkStatus} />
+            </div>
           </div>
         ) : <div role="status" className="flex flex-1 items-center justify-center text-sm text-gray-400">{workspace.storageError ? "创作记录未能载入，原数据已保留。" : "正在恢复创作…"}</div>}
         <footer className="flex shrink-0 items-center justify-center gap-3 pt-3 text-center text-xs text-gray-400">
@@ -197,6 +216,8 @@ interface EditorProps {
 }
 
 function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearImage, onDocumentUpload, onClearDocument, uploading, onGenerate, onCancel, onCheckStatus }: EditorProps) {
+  const [pendingInputChange, setPendingInputChange] = useState<{ kind: "clear" } | { kind: "input-mode"; useUrls: boolean; upload?: { file: File; slot: 1 | 2 } } | null>(null)
+  const inputChangeFocus = useRef<HTMLElement | null>(null)
   const draft = creation.draft
   const base = creation.versions.find(version => version.id === creation.selectedVersionId && version.status === "complete" && version.imageUrl)
   const pending = creation.versions.find(version => version.status === "loading")
@@ -269,6 +290,7 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   }, [creation.versions, actions.fullscreenImageUrl, actions.setFullscreenImageUrl, selectVersion, pending])
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"][data-state], [role="alertdialog"]')) return
       const target = document.activeElement
       const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
       if (event.key === "Escape" && actions.showFullscreen) actions.closeFullscreen()
@@ -299,15 +321,34 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
     onClearImage(creation.id, 1); onClearImage(creation.id, 2); onClearDocument()
     if (hasAnnotations) annotationEditor.change([])
     patch({ prompt: "" })
-    promptRef.current?.focus()
+    inputChangeFocus.current = promptRef.current
   }
-  const changeMode = (useUrls: boolean) => {
+  const changeMode = (useUrls: boolean, trigger: HTMLButtonElement) => {
     if (pending || hasAnnotations || useUrls === draft.useUrls) return
+    if (referenceCount > 0) { inputChangeFocus.current = trigger; setPendingInputChange({ kind: "input-mode", useUrls }); return }
     onClearImage(creation.id, 1); onClearImage(creation.id, 2)
     patch({ useUrls })
   }
+  const confirmInputChange = () => {
+    if (pending || !pendingInputChange) return
+    if (pendingInputChange.kind === "clear") clearAll()
+    else if (!hasAnnotations) {
+      if (pendingInputChange.upload) void onUpload(creation.id, pendingInputChange.upload.file, pendingInputChange.upload.slot)
+      else {
+        onClearImage(creation.id, 1); onClearImage(creation.id, 2)
+        patch({ useUrls: pendingInputChange.useUrls })
+      }
+    }
+    setPendingInputChange(null)
+  }
   const upload = (file: File, slot: 1 | 2) => {
+    if (pending || pendingInputChange) return Promise.resolve()
     if (hasAnnotations) { onToast("批注修改期间暂停添加补充参考图。", "error"); return Promise.resolve() }
+    if (draft.useUrls && referenceCount > 0) {
+      inputChangeFocus.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : promptRef.current
+      setPendingInputChange({ kind: "input-mode", useUrls: false, upload: { file, slot } })
+      return Promise.resolve()
+    }
     return onUpload(creation.id, file, slot)
   }
   const uploadPasted = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -330,8 +371,8 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
   }
 
   return (
-    <div className="grid min-w-0 shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(360px,35%)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_auto]" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
-      <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-col lg:gap-3 lg:overflow-y-auto lg:pr-2">
+    <div className="flex min-w-0 shrink-0 flex-col lg:min-h-0 lg:flex-1" onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }} onDrop={drop}>
+      <EditorLayout input={<>
         {creation.creationUnknown && <p role="alert" className="text-xs text-amber-300">创作是否建立尚未确认，请先刷新创作核对，输入已保留。</p>}
         {api.ready && !api.error && draft.selectedMappingId && !selectedMapping && <p role="alert" className="mb-2 text-xs text-amber-300">之前选择的模型已被移除，请重新选择模型。</p>}
         <InputSection mappings={api.mappings} apiMode={api.apiMode} apiConfigured={api.isConfigured}
@@ -340,22 +381,20 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
           thinkingLevel="minimal" setThinkingLevel={noop} resolution="1K" setResolution={noop} useGrounding={false} setUseGrounding={noop}
           useUrls={draft.useUrls} setUseUrls={changeMode} image1Preview={image1Preview} image2Preview={image2Preview} image1={draft.image1} image1Url={draft.image1Url} image2Url={draft.image2Url}
           documentName={draft.documentName ?? ""} documentText={draft.documentText ?? ""} documentFile={draft.documentFile ?? null} onDocumentUpload={onDocumentUpload} onClearDocument={onClearDocument}
-          hasImages={Boolean(base || referenceCount)} onToast={onToast} onClearAll={clearAll} onImageUpload={upload}
+          hasImages={Boolean(base || referenceCount)} onToast={onToast} onClearAll={trigger => { if (!pending) { inputChangeFocus.current = trigger; setPendingInputChange({ kind: "clear" }) } }} onImageUpload={upload}
           onUrlChange={(url, slot) => { if (pending || hasAnnotations) return; clearImage(slot); patch(slot === 1 ? { image1Url: url } : { image2Url: url }) }} onClearImage={clearImage}
           onKeyDown={event => { if (!event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && (event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (canGenerate) onGenerate(creation.id) } }} onPromptPaste={uploadPasted}
           onImageFullscreen={actions.openFullscreen} promptTextareaRef={promptRef} baseGeneration={base} pendingGeneration={pending}
           referenceCount={referenceCount} onClearReferences={clearReferences} hasAnnotations={hasAnnotations} annotationContent={<AnnotationList editor={annotationEditor} onComplete={() => setAnnotationTool(null)} />} />
-        <CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} onCheckStatus={id => void onCheckStatus(creation.id, id)} onRepair={id => void onCheckStatus(creation.id, id, true)} onDownloadDocument={document => void actions.downloadDocument(document)} className="order-3 min-h-[140px] shrink-0 pb-2 lg:order-none" />
-      </div>
-      <div className="order-2 h-[420px] min-w-0 lg:order-none lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:h-auto lg:min-h-0">
-        <OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}
+      </>}
+      history={<CreationHistory generations={creation.versions} selectedId={creation.selectedVersionId} pending={Boolean(pending)} onSelect={selectVersion} onCancel={id => onCancel(creation.id, id)} onCheckStatus={id => void onCheckStatus(creation.id, id)} onRepair={id => void onCheckStatus(creation.id, id, true)} onDownloadDocument={document => void actions.downloadDocument(document)} className="min-h-[140px] shrink-0 pb-2" />}
+      preview={<OutputSection selectedGeneration={base} pendingGeneration={pending} generations={creation.versions} selectedGenerationId={creation.selectedVersionId} setSelectedGenerationId={selectVersion}
           imageLoaded={imageLoaded} setImageLoaded={setImageLoaded} onCancelGeneration={id => onCancel(creation.id, id)} onDeleteGeneration={noop}
           onOpenFullscreen={() => generatedImage && actions.openFullscreen(generatedImage.url)} onCopy={() => void actions.copyImageToClipboard(generatedImage)} onDownload={() => void actions.downloadImage(generatedImage)}
           onOpenInNewTab={() => actions.openImageInNewTab(generatedImage)} onImageReady={noop} onImageError={noop}
           annotationTools={base && <AnnotationTools editor={annotationEditor} disabledReason={annotationDisabledReason} tool={annotationTool} setTool={setAnnotationTool} addCenter={() => { if (!annotationDisabledReason) addCenterAnnotation(annotationEditor) }} onRetryMetadata={metadata.error ? metadata.retry : undefined} />}
-          annotationOverlay={annotationDraft && <AnnotationCanvas editor={annotationEditor} tool={annotationTool} disabled={Boolean(annotationDisabledReason)} onComplete={() => setAnnotationTool(null)} />} />
-      </div>
-      <section aria-label="生成操作" className="fixed inset-x-0 bottom-0 z-30 space-y-2 border-t border-white/20 bg-black p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:static lg:col-start-1 lg:row-start-2 lg:rounded-md lg:border lg:p-3">
+          annotationOverlay={annotationDraft && <AnnotationCanvas editor={annotationEditor} tool={annotationTool} disabled={Boolean(annotationDisabledReason)} onComplete={() => setAnnotationTool(null)} />} />}
+      actions={<section aria-label="生成操作" className="space-y-2 rounded-md border border-white/20 bg-black p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {base && <p className="text-xs text-gray-300">基于 V{base.version ?? 1}{hasAnnotations ? ` · ${annotationDraft!.snapshot.marks.length} 条批注` : ""}</p>}
         {submissionReason && <p id="generation-submission-reason" role="status" className="text-xs leading-relaxed text-amber-200">{submissionReason}</p>}
         {!pending && !uploading && <div className="flex gap-3">
@@ -363,7 +402,24 @@ function CreationEditor({ creation, workspace, api, onToast, onUpload, onClearIm
           {referenceConflict && <button type="button" onClick={clearReferences} className="text-xs text-sky-200 underline underline-offset-4">移除参考图</button>}
         </div>}
         <Button type="button" onClick={() => onGenerate(creation.id)} disabled={!canGenerate} aria-describedby={submissionReason ? "generation-submission-reason" : undefined} className="h-11 w-full bg-white text-sm font-semibold text-black hover:bg-gray-200">{pending ? "生成中…" : uploading ? "正在处理上传内容…" : base ? "生成新版本" : "生成图片"}</Button>
-      </section>
+      </section>} />
+      <AlertDialog open={Boolean(pendingInputChange)} onOpenChange={open => { if (!open) setPendingInputChange(null) }}>
+        <AlertDialogContent className="border-white/20 bg-neutral-950 text-white" onCloseAutoFocus={event => {
+          event.preventDefault()
+          const target = inputChangeFocus.current
+          if (target?.isConnected) target.focus()
+          else promptRef.current?.focus()
+        }}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingInputChange?.kind === "clear" ? "清空本轮输入？" : `切换为${pendingInputChange?.kind === "input-mode" && pendingInputChange.useUrls ? "链接" : "文件"}输入？`}</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-300">{pendingInputChange?.kind === "clear" ? "将清除本轮文字、背景文档、参考图和未提交批注；已保存的图片版本、基准图和模型设置会保留。" : "切换会移除当前参考图；本轮文字、背景文档、已保存版本和基准图会保留。"}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/20 bg-transparent text-white hover:bg-white/10 hover:text-white">取消</AlertDialogCancel>
+            <AlertDialogAction disabled={Boolean(pending)} onClick={confirmInputChange} className="bg-white text-black hover:bg-gray-200">{pendingInputChange?.kind === "clear" ? "确认清空" : "移除参考图并切换"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Suspense fallback={null}>{actions.showFullscreen && actions.fullscreenImageUrl && <FullscreenViewer imageUrl={actions.fullscreenImageUrl} onClose={actions.closeFullscreen} onNavigate={navigate} canNavigate={!pending && fullscreenIsVersion && completed.length > 1} />}</Suspense>
     </div>
   )
