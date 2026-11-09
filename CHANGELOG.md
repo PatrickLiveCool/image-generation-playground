@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.4...v0.5.0) (2026-11-09)
+
+
+### Features
+
+* **workspace:** add recoverable deletion and adjustable editor ([#36](https://github.com/PatrickLiveCool/image-generation-playground/issues/36)) ([b9231ab](https://github.com/PatrickLiveCool/image-generation-playground/commit/b9231ababa008963b622a2ec1ff98c8886dd4d9b))
+
+
+### Documentation
+
+* **maintenance:** define long-term maintenance workflow ([#35](https://github.com/PatrickLiveCool/image-generation-playground/issues/35)) ([6348100](https://github.com/PatrickLiveCool/image-generation-playground/commit/63481000c16087024b1cd23ce87b18904ce26db7))
+
 ## [0.4.4](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.3...v0.4.4) (2026-11-08)
 
 
