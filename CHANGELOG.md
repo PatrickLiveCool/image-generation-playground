@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.5.0...v0.5.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **release:** wait for maintenance readiness and define rollback rules ([#38](https://github.com/PatrickLiveCool/image-generation-playground/issues/38)) ([b1d0365](https://github.com/PatrickLiveCool/image-generation-playground/commit/b1d0365e74dba216d7a3db5ab2477aef1fb34452))
+
 ## [0.5.0](https://github.com/PatrickLiveCool/image-generation-playground/compare/v0.4.4...v0.5.0) (2026-11-09)
 
 
