@@ -503,6 +503,63 @@ class ServerTest(unittest.TestCase):
         self.assertLess(phases.index('database_verified'), phases.index('staged'))
         self.assertEqual(result['database']['after']['version'], '0006')
 
+    def test_migration_waits_for_running_maintenance_after_nginx_reload(self):
+        self.config['healthTimeoutSeconds'] = 1
+        clock = [0.0]
+        probes = []
+        ready = self.system.maintenance_ready
+
+        def probe(origin):
+            probes.append(origin)
+            self.assertNotIn('migrate', [command for command, _ in self.system.database_calls])
+            self.assertEqual(self.system.reloads, 1)
+            if len(probes) == 1:
+                return False  # Old worker still returns the application with HTTP 200.
+            if len(probes) == 2:
+                raise ReleaseError('synthetic transient probe connection failure')
+            return ready(origin)
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(self.system, 'maintenance_ready', side_effect=probe), \
+                patch('server.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('server.time.sleep', side_effect=sleep):
+            result = self.runtime.deploy(*self.bundle(account=True))
+
+        self.assertEqual(len(probes), 3)
+        self.assertEqual(result['status'], 'healthy')
+        self.assertEqual([command for command, _ in self.system.database_calls], ['preflight', 'migrate', 'verify'])
+
+    def test_maintenance_timeout_never_migrates_and_restores_compatible_source(self):
+        self.runtime.deploy(*self.bundle(account=True, database_version='0004'))
+        self.runtime.acknowledge('complete')
+        source = dict(self.runtime.state['current'])
+        site = pathlib.Path(self.config['nginxSite']).read_bytes()
+        self.system.database_calls.clear()
+        reloads = self.system.reloads
+        self.config['healthTimeoutSeconds'] = .5
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(self.system, 'maintenance_ready', return_value=False) as probe, \
+                patch('server.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('server.time.sleep', side_effect=sleep):
+            with self.assertRaisesRegex(ReleaseError, 'maintenance response has not been verified'):
+                self.runtime.deploy(*self.bundle('v0.2.0', 'b' * 40, account=True))
+
+        self.assertGreater(probe.call_count, 1)
+        self.assertEqual(clock[0], .5)
+        self.assertEqual(self.system.reloads - reloads, 2)  # Enter maintenance, then restore source.
+        self.assertEqual([command for command, _ in self.system.database_calls], ['preflight', 'verify', 'verify'])
+        self.assertEqual(self.system.database_version, '0004')
+        self.assertEqual(self.runtime.state['current'], source)
+        self.assertEqual(pathlib.Path(self.config['nginxSite']).read_bytes(), site)
+        self.assertEqual(self.runtime.journal['phase'], 'rolled_back')
+        self.assertEqual(self.runtime.receipt()['status'], 'healthy')
+
     def test_annotation_upgrade_is_explicit_forward_only_and_keeps_rollback_closed(self):
         source = self.bundle(account=True, workspace=1, database_version='0004')
         self.runtime.deploy(*source)

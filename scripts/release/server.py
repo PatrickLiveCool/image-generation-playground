@@ -750,6 +750,19 @@ class Runtime:
         require(count == 1 and 'proxy_pass' not in text, 'maintenance must close every image upstream')
         return text
 
+    def wait_maintenance_ready(self):
+        # A successful reload only signals Nginx; old workers may still answer.
+        # Retry the read-only probe, never the reload or a database operation.
+        deadline = time.monotonic() + self.config.get('healthTimeoutSeconds', 30)
+        while time.monotonic() < deadline:
+            try:
+                if self.system.maintenance_ready(self.config['publicBaseUrl']):
+                    return
+            except ReleaseError:
+                pass
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        raise ReleaseError('maintenance response has not been verified before the health timeout')
+
     def enter_service_maintenance(self):
         require(self.access_floor, 'account maintenance requires its access floor')
         self.system.validate_shutdown()
@@ -776,7 +789,7 @@ class Runtime:
         self.phase('entering_maintenance')
         atomic_write(site, content.encode(), maintenance['mode'])
         self.system.reload_nginx()
-        require(self.system.maintenance_ready(self.config['publicBaseUrl']), 'maintenance response has not been verified')
+        self.wait_maintenance_ready()
         maintenance['ready'] = True
         self.save_state()
         self.phase('service_maintenance')
